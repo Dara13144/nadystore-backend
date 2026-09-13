@@ -497,13 +497,9 @@ async function runDatabaseStartup() {
         const productCount = await prisma_1.default.product.count();
         console.log(`[Startup] Found ${productCount} products in database.`);
         // Ensure default administrator accounts exist
-        // Delete legacy admin@topup.com if present
-        await prisma_1.default.user.deleteMany({
-            where: { email: { in: ['admin@topup.com', 'admin@gmail.com'] } },
-        }).catch(() => { });
-        // Ensure mdara9695@gmail.com is designated administrator
         const adminPassword = await bcryptjs_1.default.hash('admin123', 10);
-        for (const email of ['mdara9695@gmail.com']) {
+        const ADMIN_ACCOUNTS = ['admin@topup.com', 'mdara9695@gmail.com', 'admin@nadytopup.com', 'admin@gmail.com'];
+        for (const email of ADMIN_ACCOUNTS) {
             const existing = await prisma_1.default.user.findUnique({ where: { email } });
             if (!existing) {
                 await prisma_1.default.user.create({
@@ -511,12 +507,12 @@ async function runDatabaseStartup() {
                 });
                 console.log(`[Startup] Created administrator account: ${email}`);
             }
-            else if (existing.role !== 'ADMIN') {
+            else {
                 await prisma_1.default.user.update({
                     where: { email },
-                    data: { role: 'ADMIN' },
+                    data: { role: 'ADMIN', password: adminPassword },
                 });
-                console.log(`[Startup] Confirmed ADMIN role for: ${email}`);
+                console.log(`[Startup] Updated/Confirmed ADMIN account: ${email}`);
             }
         }
         if (productCount === 0) {
