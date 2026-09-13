@@ -62,28 +62,61 @@ app.use(securityMiddleware);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads')));
 
 // ─── Health & Root Routes ─────────────────────────────────────────────────────
+const apiDirectory = {
+  name: 'DaraTopup API Server',
+  version: '1.0.2',
+  endpoints: {
+    health: [
+      { method: 'GET', path: '/healthy', description: 'System health check' },
+      { method: 'GET', path: '/health', description: 'System health check' },
+      { method: 'GET', path: '/api/health', description: 'API health check' },
+      { method: 'GET', path: '/api/db-health', description: 'Database connectivity test' },
+    ],
+    products: [
+      { method: 'GET', path: '/api/products', description: 'List all available games and categories' },
+      { method: 'GET', path: '/api/products/:slug', description: 'Get product packages and details by slug' },
+    ],
+    auth: [
+      { method: 'POST', path: '/api/auth/register', description: 'Register new user account' },
+      { method: 'POST', path: '/api/auth/login', description: 'User login (returns JWT token)' },
+      { method: 'POST', path: '/api/auth/google', description: 'Google OAuth login / verification' },
+      { method: 'GET', path: '/api/auth/me', description: 'Get current authenticated user profile' },
+    ],
+    orders: [
+      { method: 'POST', path: '/api/orders', description: 'Create topup order and generate KHQR' },
+      { method: 'GET', path: '/api/orders/:orderId', description: 'Get order details by order ID' },
+      { method: 'GET', path: '/api/orders/status/:txnId', description: 'Check payment status by transaction ID' },
+      { method: 'GET', path: '/api/orders/user/history', description: 'Get user order history (Authenticated)' },
+    ],
+    payments: [
+      { method: 'POST', path: '/api/payments/verify-khqr', description: 'Verify Bakong KHQR transaction' },
+      { method: 'POST', path: '/api/payments/aba/webhook', description: 'ABA PayWay payment webhook callback' },
+    ],
+    admin: [
+      { method: 'GET', path: '/api/admin/dashboard', description: 'Admin statistics & sales overview' },
+      { method: 'GET', path: '/api/admin/orders', description: 'List and filter all orders' },
+      { method: 'POST', path: '/api/admin/upload-image', description: 'Upload game banners and icons' },
+    ],
+  },
+};
+
 const healthHandler = async (req: express.Request, res: express.Response) => {
+  let dbStatus = 'connected';
   try {
     // Quick DB ping to verify connectivity
     await prisma.$queryRaw`SELECT 1`;
-    return res.status(200).json({
-      status: 'healthy',
-      message: 'DaraTopup Backend API Server is running successfully!',
-      timestamp: new Date().toISOString(),
-      sandbox: process.env.SANDBOX_MODE === 'true',
-      db: 'connected',
-      version: '1.0.2',
-    });
   } catch (err: any) {
-    return res.status(200).json({
-      status: 'healthy',
-      message: 'DaraTopup Backend API Server is running successfully!',
-      timestamp: new Date().toISOString(),
-      sandbox: process.env.SANDBOX_MODE === 'true',
-      db: 'error: ' + err.message,
-      version: '1.0.2',
-    });
+    dbStatus = 'error: ' + err.message;
   }
+
+  return res.status(200).json({
+    status: 'healthy',
+    message: 'DaraTopup Backend API Server is running successfully!',
+    timestamp: new Date().toISOString(),
+    sandbox: process.env.SANDBOX_MODE === 'true',
+    db: dbStatus,
+    ...apiDirectory,
+  });
 };
 
 app.get(['/', '/health', '/healthy', '/healthz', '/ping', '/api', '/api/health', '/api/healthy', '/api/healthz', '/api/ping'], healthHandler);
@@ -93,10 +126,13 @@ app.get('/api/db-health', async (req, res) => {
     await prisma.$queryRaw`SELECT 1`;
     res.status(200).json({
       database: 'connected',
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
     res.status(500).json({
       database: 'disconnected',
+      status: 'unhealthy',
       error: err.message,
     });
   }
