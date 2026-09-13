@@ -38,6 +38,7 @@ model Package {
   name        String   // e.g., "50 Diamonds", "Weekly Diamond Pass"
   amount      Int      // Numeric representation of package items
   price       Float    // USD price
+  image       String?  // Optional custom package image URL or uploaded path
   isActive    Boolean  @default(true)
   category    String   @default("NORMAL") // BEST_SELLER, NORMAL
   badge       String?  // Optional badge text

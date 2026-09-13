@@ -13,8 +13,8 @@ const router = (0, express_1.Router)();
 // POST /api/payments/create
 router.post('/create', async (req, res) => {
     try {
-        const { packageId, playerId, playerZoneId, paymentMethod, email } = req.body;
-        if (!packageId || !playerId || !paymentMethod) {
+        const { packageId, playerId, playerZoneId, paymentMethod, email, gameSlug, productSlug, packageName, price, amount } = req.body;
+        if ((!packageId && !packageName) || !playerId || !paymentMethod) {
             return res.status(400).json({ error: 'Required fields missing' });
         }
         let normalizedMethod = (paymentMethod || '').toUpperCase().trim();
@@ -26,11 +26,69 @@ router.post('/create', async (req, res) => {
             normalizedMethod = 'BAKONG'; // Default to Bakong KHQR
         }
         const resolvedMethod = normalizedMethod;
-        // Fetch the package details
-        const pkg = await prisma_1.default.package.findUnique({
-            where: { id: packageId },
-            include: { product: true },
-        });
+        // Resilient Package Resolution
+        let pkg = null;
+        if (packageId) {
+            pkg = await prisma_1.default.package.findUnique({
+                where: { id: packageId },
+                include: { product: true },
+            }).catch(() => null);
+        }
+        if (!pkg && packageId) {
+            pkg = await prisma_1.default.package.findFirst({
+                where: {
+                    OR: [
+                        { id: packageId },
+                        { name: packageId },
+                    ],
+                },
+                include: { product: true },
+            }).catch(() => null);
+        }
+        const targetSlug = productSlug || gameSlug;
+        if (!pkg && targetSlug) {
+            const prod = await prisma_1.default.product.findFirst({
+                where: {
+                    OR: [
+                        { slug: targetSlug },
+                        { id: targetSlug },
+                        { name: { equals: targetSlug, mode: 'insensitive' } },
+                    ],
+                },
+                include: { packages: true },
+            }).catch(() => null);
+            if (prod) {
+                if (packageName) {
+                    pkg = prod.packages.find((p) => p.name.toLowerCase() === packageName.toLowerCase()) || null;
+                }
+                if (!pkg && price) {
+                    pkg = prod.packages.find((p) => Math.abs(p.price - parseFloat(price)) < 0.05) || null;
+                }
+                if (!pkg && prod.packages.length > 0) {
+                    pkg = prod.packages[0];
+                }
+                if (pkg) {
+                    pkg = await prisma_1.default.package.findUnique({
+                        where: { id: pkg.id },
+                        include: { product: true },
+                    }).catch(() => null);
+                }
+                else {
+                    // If no package exists yet, create on the fly
+                    const newPkg = await prisma_1.default.package.create({
+                        data: {
+                            productId: prod.id,
+                            name: packageName || `${amount || 60} Diamonds`,
+                            amount: parseInt(amount || 60, 10),
+                            price: parseFloat(price || 0.99),
+                            category: 'NORMAL',
+                        },
+                        include: { product: true },
+                    }).catch(() => null);
+                    pkg = newPkg;
+                }
+            }
+        }
         if (!pkg) {
             return res.status(404).json({ error: 'Package not found' });
         }
@@ -149,14 +207,14 @@ router.post('/create', async (req, res) => {
             },
         });
         // Send Telegram Alert for new order
-        const productSlug = pkg.product.slug || '';
-        const isMLBB = productSlug.includes('mobile-legends');
-        const isFreeFire = productSlug.includes('free-fire');
-        const isValorant = productSlug.includes('valorant');
-        const isBloodStrike = productSlug.includes('blood-strike');
-        const isHoK = productSlug.includes('honor-of-kings');
-        const isFarlight = productSlug.includes('farlight');
-        const isDeltaForce = productSlug.includes('delta-force');
+        const currentProductSlug = pkg.product.slug || '';
+        const isMLBB = currentProductSlug.includes('mobile-legends');
+        const isFreeFire = currentProductSlug.includes('free-fire');
+        const isValorant = currentProductSlug.includes('valorant');
+        const isBloodStrike = currentProductSlug.includes('blood-strike');
+        const isHoK = currentProductSlug.includes('honor-of-kings');
+        const isFarlight = currentProductSlug.includes('farlight');
+        const isDeltaForce = currentProductSlug.includes('delta-force');
         let credentialsLabel = `<b>Player ID:</b> <code>${playerId}</code>`;
         if (isMLBB) {
             credentialsLabel = `<b>Mobile Legends ID:</b> <code>${playerId}</code>\n<b>Server ID:</b> <code>${playerZoneId || 'N/A'}</code>`;

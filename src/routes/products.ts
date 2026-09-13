@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import prisma from '../prisma';
 import { authenticateJWT, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { lookupPlayerNickname } from '../utils/gameProviderMock';
+import { broadcastRealtimeEvent } from '../lib/supabase';
 
 const router = Router();
 
@@ -60,9 +61,18 @@ router.get('/lookup/:gameSlug', async (req: Request, res: Response) => {
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req: Request, res: Response) => {
   try {
-    const { slug } = req.params;
-    const product = await prisma.product.findUnique({
-      where: { slug },
+    const rawSlug = decodeURIComponent(req.params.slug).trim();
+    const slug = rawSlug.toLowerCase();
+
+    const product = await prisma.product.findFirst({
+      where: {
+        OR: [
+          { slug: slug },
+          { slug: rawSlug },
+          { id: rawSlug },
+        ],
+        isActive: true,
+      },
       include: {
         packages: {
           where: { isActive: true },
@@ -133,13 +143,54 @@ router.put('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedReque
 router.delete('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    await prisma.product.delete({
-      where: { id },
+    const product = await prisma.product.findFirst({
+      where: { OR: [{ id }, { slug: id }] },
+      include: { packages: true },
     });
-    return res.status(200).json({ message: 'Product deleted successfully' });
-  } catch (error) {
+
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const packageIds = product.packages.map((p) => p.id);
+
+    if (packageIds.length > 0) {
+      await prisma.stock.deleteMany({
+        where: { packageId: { in: packageIds } },
+      });
+    }
+
+    const orderCount = await prisma.order.count({
+      where: { packageId: { in: packageIds } },
+    });
+
+    if (orderCount > 0) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { isActive: false },
+      });
+      await prisma.package.updateMany({
+        where: { productId: product.id },
+        data: { isActive: false },
+      });
+    } else {
+      await prisma.package.deleteMany({
+        where: { productId: product.id },
+      });
+      await prisma.product.delete({
+        where: { id: product.id },
+      });
+    }
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_DELETED', {
+      id: product.id,
+      slug: product.slug,
+    });
+
+    return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
+  } catch (error: any) {
     console.error('Error deleting product:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
   }
 });
 

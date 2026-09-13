@@ -543,12 +543,12 @@ async function runDatabaseStartup() {
                 console.log(`[Startup] Confirmed ADMIN role for: ${email}`);
             }
         }
-        if (productCount < 20) {
-            console.log('[Startup] Running auto-seed for full catalog...');
+        if (productCount === 0) {
+            console.log('[Startup] Empty database detected — running initial seed for catalog...');
             await seedDatabase();
         }
         else {
-            console.log('[Startup] Catalog complete — ready.');
+            console.log(`[Startup] Database catalog active with ${productCount} products — ready.`);
         }
     }
     catch (err) {

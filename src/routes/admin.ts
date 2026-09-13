@@ -1,8 +1,10 @@
 import { Router, Response } from 'express';
 import prisma from '../prisma';
 import { authenticateJWT, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
+import { broadcastRealtimeEvent } from '../lib/supabase';
 import fs from 'fs';
 import path from 'path';
+import multer from 'multer';
 
 const router = Router();
 const BACKUPS_DIR = path.join(process.cwd(), 'backups');
@@ -14,8 +16,85 @@ if (!fs.existsSync(BACKUPS_DIR)) {
   }
 }
 
+const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  } catch (e) {
+    console.error('Failed to create uploads dir:', e);
+  }
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.png';
+    const cleanName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+    cb(null, `${cleanName}_${Date.now()}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    const allowed = /jpeg|jpg|png|webp|gif|svg\+xml|svg/i;
+    const isMimeValid = allowed.test(file.mimetype);
+    const isExtValid = allowed.test(path.extname(file.originalname).toLowerCase());
+    if (isMimeValid || isExtValid) {
+      return cb(null, true);
+    }
+    cb(new Error('Only image files (PNG, JPG, WEBP, SVG) are permitted'));
+  },
+});
+
 // Apply auth + admin restriction to all paths in this router
 router.use(authenticateJWT, requireAdmin);
+
+// 0. Image Upload Endpoint
+router.post('/upload-image', (req: any, res: any) => {
+  upload.single('image')(req, res, (err: any) => {
+    if (err) {
+      console.error('Image upload error:', err);
+      return res.status(400).json({ error: err.message || 'Image upload failed' });
+    }
+
+    if (req.file) {
+      const publicUrl = `/uploads/${req.file.filename}`;
+      console.log(`[Admin Dashboard] Uploaded new image file: ${publicUrl}`);
+      return res.status(200).json({
+        message: 'Image uploaded successfully',
+        url: publicUrl,
+        filename: req.file.filename,
+      });
+    }
+
+    // Base64 image payload fallback
+    if (req.body?.imageBase64) {
+      try {
+        const matches = req.body.imageBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          const ext = matches[1].split('/')[1] || 'png';
+          const filename = `uploaded_${Date.now()}.${ext}`;
+          const filePath = path.join(UPLOADS_DIR, filename);
+          fs.writeFileSync(filePath, Buffer.from(matches[2], 'base64'));
+          const publicUrl = `/uploads/${filename}`;
+          return res.status(200).json({
+            message: 'Image uploaded successfully',
+            url: publicUrl,
+            filename,
+          });
+        }
+      } catch (base64Err: any) {
+        console.error('Base64 upload error:', base64Err);
+      }
+    }
+
+    return res.status(400).json({ error: 'No image file or imageBase64 payload provided' });
+  });
+});
 
 // 1. Fetch dashboard metric figures
 router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
@@ -284,10 +363,10 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
 router.post('/products/:productId/packages', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { productId } = req.params;
-    const { name, amount, price, category, badge } = req.body;
+    const { name, amount, price, category, badge, image } = req.body;
 
     if (!name || amount === undefined || price === undefined) {
-      return res.status(400).json({ error: 'Package name, amount, and price are required' });
+      return res.status(400).json({ error: 'Name, amount and price are required' });
     }
 
     // Verify product exists
@@ -302,6 +381,7 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
         name,
         amount: parseInt(amount, 10),
         price: parseFloat(price),
+        image: image || null,
         isActive: true,
         category: category || 'NORMAL',
         badge: badge || null,
@@ -340,11 +420,11 @@ router.patch('/products/:id', async (req: AuthenticatedRequest, res: Response) =
   }
 });
 
-// 7c. Package management: Update any package field (Name, Amount, Price, Category, Badge, Status)
+// 7c. Package management: Update any package field (Name, Amount, Price, Category, Badge, Status, Image)
 router.patch('/packages/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, amount, price, category, badge, isActive } = req.body;
+    const { name, amount, price, category, badge, isActive, image } = req.body;
     const data: any = {};
     if (name !== undefined) data.name = name;
     if (amount !== undefined) data.amount = parseInt(amount, 10);
@@ -352,6 +432,7 @@ router.patch('/packages/:id', async (req: AuthenticatedRequest, res: Response) =
     if (category !== undefined) data.category = category;
     if (badge !== undefined) data.badge = badge;
     if (isActive !== undefined) data.isActive = isActive;
+    if (image !== undefined) data.image = image;
 
     const updated = await prisma.package.update({ where: { id }, data });
     console.log(`[Admin Dashboard] Updated package: ${updated.name} ($${updated.price})`);
@@ -366,12 +447,63 @@ router.patch('/packages/:id', async (req: AuthenticatedRequest, res: Response) =
 router.delete('/products/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    await prisma.product.delete({ where: { id } });
-    console.log(`[Admin Dashboard] Deleted product: ${id}`);
-    return res.status(200).json({ message: 'Product deleted successfully' });
+    
+    // Find target product by ID or slug
+    const product = await prisma.product.findFirst({
+      where: { OR: [{ id }, { slug: id }] },
+      include: { packages: true },
+    });
+
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const packageIds = product.packages.map((p) => p.id);
+
+    // Delete associated stocks
+    if (packageIds.length > 0) {
+      await prisma.stock.deleteMany({
+        where: { packageId: { in: packageIds } },
+      });
+    }
+
+    // Check if any order is linked to these packages
+    const orderCount = await prisma.order.count({
+      where: { packageId: { in: packageIds } },
+    });
+
+    if (orderCount > 0) {
+      // If historical orders exist, soft-delete product so foreign key integrity is preserved
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { isActive: false },
+      });
+      await prisma.package.updateMany({
+        where: { productId: product.id },
+        data: { isActive: false },
+      });
+      console.log(`[Admin Dashboard] Soft-deleted product (has ${orderCount} historical orders): ${product.slug}`);
+    } else {
+      // If no orders exist, hard-delete product and packages
+      await prisma.package.deleteMany({
+        where: { productId: product.id },
+      });
+      await prisma.product.delete({
+        where: { id: product.id },
+      });
+      console.log(`[Admin Dashboard] Hard-deleted product: ${product.slug}`);
+    }
+
+    // Broadcast deletion via Supabase Realtime
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_DELETED', {
+      id: product.id,
+      slug: product.slug,
+    });
+
+    return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
   } catch (error: any) {
     console.error('Admin delete product error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
   }
 });
 
@@ -379,12 +511,42 @@ router.delete('/products/:id', async (req: AuthenticatedRequest, res: Response) 
 router.delete('/packages/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    await prisma.package.delete({ where: { id } });
-    console.log(`[Admin Dashboard] Deleted package: ${id}`);
-    return res.status(200).json({ message: 'Package deleted successfully' });
+    
+    const pkg = await prisma.package.findUnique({
+      where: { id },
+    });
+
+    if (!pkg) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    await prisma.stock.deleteMany({
+      where: { packageId: id },
+    });
+
+    const orderCount = await prisma.order.count({
+      where: { packageId: id },
+    });
+
+    if (orderCount > 0) {
+      await prisma.package.update({
+        where: { id },
+        data: { isActive: false },
+      });
+      console.log(`[Admin Dashboard] Soft-deleted package (has ${orderCount} orders): ${id}`);
+    } else {
+      await prisma.package.delete({
+        where: { id },
+      });
+      console.log(`[Admin Dashboard] Hard-deleted package: ${id}`);
+    }
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PACKAGE_DELETED', { id });
+
+    return res.status(200).json({ message: 'Package deleted successfully', id });
   } catch (error: any) {
     console.error('Admin delete package error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
   }
 });
 

@@ -7,6 +7,7 @@ const express_1 = require("express");
 const prisma_1 = __importDefault(require("../prisma"));
 const auth_1 = require("../middleware/auth");
 const gameProviderMock_1 = require("../utils/gameProviderMock");
+const supabase_1 = require("../lib/supabase");
 const router = (0, express_1.Router)();
 // 1. Get all products with active packages (Public)
 router.get('/', async (req, res) => {
@@ -59,9 +60,17 @@ router.get('/lookup/:gameSlug', async (req, res) => {
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req, res) => {
     try {
-        const { slug } = req.params;
-        const product = await prisma_1.default.product.findUnique({
-            where: { slug },
+        const rawSlug = decodeURIComponent(req.params.slug).trim();
+        const slug = rawSlug.toLowerCase();
+        const product = await prisma_1.default.product.findFirst({
+            where: {
+                OR: [
+                    { slug: slug },
+                    { slug: rawSlug },
+                    { id: rawSlug },
+                ],
+                isActive: true,
+            },
             include: {
                 packages: {
                     where: { isActive: true },
@@ -126,14 +135,49 @@ router.put('/:id', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, res)
 router.delete('/:id', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        await prisma_1.default.product.delete({
-            where: { id },
+        const product = await prisma_1.default.product.findFirst({
+            where: { OR: [{ id }, { slug: id }] },
+            include: { packages: true },
         });
-        return res.status(200).json({ message: 'Product deleted successfully' });
+        if (!product) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+        const packageIds = product.packages.map((p) => p.id);
+        if (packageIds.length > 0) {
+            await prisma_1.default.stock.deleteMany({
+                where: { packageId: { in: packageIds } },
+            });
+        }
+        const orderCount = await prisma_1.default.order.count({
+            where: { packageId: { in: packageIds } },
+        });
+        if (orderCount > 0) {
+            await prisma_1.default.product.update({
+                where: { id: product.id },
+                data: { isActive: false },
+            });
+            await prisma_1.default.package.updateMany({
+                where: { productId: product.id },
+                data: { isActive: false },
+            });
+        }
+        else {
+            await prisma_1.default.package.deleteMany({
+                where: { productId: product.id },
+            });
+            await prisma_1.default.product.delete({
+                where: { id: product.id },
+            });
+        }
+        (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PRODUCT_DELETED', {
+            id: product.id,
+            slug: product.slug,
+        });
+        return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
     }
     catch (error) {
         console.error('Error deleting product:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
     }
 });
 // 7. Add Package to Product
