@@ -400,10 +400,15 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
 });
 
 // 7b. Product management: Update any product field (Name, Category, Image, Status, Slug)
-router.patch('/products/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
     const { image, name, category, isActive, slug } = req.body;
+
+    let existingProduct = await prisma.product.findFirst({
+      where: { OR: [{ id }, { slug: id }] },
+    });
+
     const data: any = {};
     if (image !== undefined) data.image = image;
     if (name !== undefined) data.name = name;
@@ -411,20 +416,63 @@ router.patch('/products/:id', async (req: AuthenticatedRequest, res: Response) =
     if (isActive !== undefined) data.isActive = isActive;
     if (slug !== undefined) data.slug = slug;
 
-    const updated = await prisma.product.update({ where: { id }, data });
-    console.log(`[Admin Dashboard] Updated product: ${updated.name} (${updated.id})`);
+    let updated;
+    if (existingProduct) {
+      updated = await prisma.product.update({ where: { id: existingProduct.id }, data });
+      console.log(`[Admin Dashboard] Updated product: ${updated.name} (${updated.id})`);
+    } else {
+      const newSlug = slug || (name ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : `game-${Date.now()}`);
+      updated = await prisma.product.create({
+        data: {
+          name: name || 'New Game',
+          slug: newSlug,
+          category: category || 'MOBILE_GAME',
+          image: image || '/images/games/default.png',
+          isActive: isActive !== undefined ? isActive : true,
+        },
+      });
+      console.log(`[Admin Dashboard] Created missing product during update: ${updated.name}`);
+    }
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_UPDATED', { product: updated });
     return res.status(200).json({ message: 'Product updated successfully', product: updated });
   } catch (error: any) {
     console.error('Admin update product error:', error);
-    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to update product: ' + (error.message || '') });
   }
 });
 
 // 7c. Package management: Update any package field (Name, Amount, Price, Category, Badge, Status, Image)
-router.patch('/packages/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.patch(['/packages/:id', '/package/:id'], async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, amount, price, category, badge, isActive, image } = req.body;
+    const { name, amount, price, category, badge, isActive, image, productId } = req.body;
+
+    // 1. First attempt: Find by exact ID
+    let existingPackage = await prisma.package.findUnique({
+      where: { id },
+    });
+
+    // 2. Second attempt: Search by product + amount or name
+    if (!existingPackage && productId) {
+      existingPackage = await prisma.package.findFirst({
+        where: {
+          productId,
+          OR: [
+            name ? { name: { equals: name, mode: 'insensitive' } } : {},
+            amount !== undefined ? { amount: parseInt(amount, 10) } : {},
+          ],
+        },
+      });
+    }
+
+    // 3. Third attempt: Search by name anywhere
+    if (!existingPackage && name) {
+      existingPackage = await prisma.package.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } },
+      });
+    }
+
     const data: any = {};
     if (name !== undefined) data.name = name;
     if (amount !== undefined) data.amount = parseInt(amount, 10);
@@ -434,12 +482,44 @@ router.patch('/packages/:id', async (req: AuthenticatedRequest, res: Response) =
     if (isActive !== undefined) data.isActive = isActive;
     if (image !== undefined) data.image = image;
 
-    const updated = await prisma.package.update({ where: { id }, data });
-    console.log(`[Admin Dashboard] Updated package: ${updated.name} ($${updated.price})`);
-    return res.status(200).json({ message: 'Package updated successfully', package: updated });
+    let resultPackage;
+    if (existingPackage) {
+      resultPackage = await prisma.package.update({
+        where: { id: existingPackage.id },
+        data,
+      });
+      console.log(`[Admin Dashboard] Updated package: ${resultPackage.name} ($${resultPackage.price})`);
+    } else {
+      // Find suitable product to link new package
+      let targetProductId = productId;
+      if (!targetProductId) {
+        const anyProduct = await prisma.product.findFirst();
+        if (!anyProduct) {
+          return res.status(404).json({ error: 'Product not found to attach this package' });
+        }
+        targetProductId = anyProduct.id;
+      }
+
+      resultPackage = await prisma.package.create({
+        data: {
+          productId: targetProductId,
+          name: name || 'New Package',
+          amount: amount !== undefined ? parseInt(amount, 10) : 100,
+          price: price !== undefined ? parseFloat(price) : 0.99,
+          category: category || 'NORMAL',
+          badge: badge || null,
+          image: image || null,
+          isActive: isActive !== undefined ? isActive : true,
+        },
+      });
+      console.log(`[Admin Dashboard] Upserted missing package: ${resultPackage.name} ($${resultPackage.price})`);
+    }
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PACKAGE_UPDATED', { package: resultPackage });
+    return res.status(200).json({ message: 'Package updated successfully', package: resultPackage });
   } catch (error: any) {
     console.error('Admin update package error:', error);
-    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to update package: ' + (error.message || '') });
   }
 });
 
