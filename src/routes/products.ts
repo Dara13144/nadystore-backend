@@ -96,28 +96,89 @@ router.get('/:slug', async (req: Request, res: Response) => {
 // 4. Create Product
 router.post('/', authenticateJWT, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, slug, image, category, isActive } = req.body;
-    if (!name || !slug || !image || !category) {
-      return res.status(400).json({ error: 'Required fields missing' });
+    const { name, slug: customSlug, image, category, isActive, packages, autoSeedPackages } = req.body;
+    if (!name || !category) {
+      return res.status(400).json({ error: 'Product name and category are required' });
     }
+
+    let baseSlug = (customSlug || name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    if (!baseSlug) baseSlug = `game-${Date.now()}`;
+
+    let finalSlug = baseSlug;
+    let counter = 1;
+    while (await prisma.product.findUnique({ where: { slug: finalSlug } })) {
+      finalSlug = `${baseSlug}-${counter++}`;
+    }
+
+    const finalImage = image && image.trim() ? image.trim() : `/images/games/${finalSlug}.png`;
 
     const product = await prisma.product.create({
       data: {
-        name,
-        slug,
-        image,
-        category,
+        name: name.trim(),
+        slug: finalSlug,
+        image: finalImage,
+        category: category.trim(),
         isActive: isActive !== undefined ? isActive : true,
       },
     });
 
-    return res.status(201).json(product);
+    if (Array.isArray(packages) && packages.length > 0) {
+      for (const p of packages) {
+        await prisma.package.create({
+          data: {
+            productId: product.id,
+            name: p.name || `${p.amount || 100} Diamonds`,
+            amount: parseInt(p.amount, 10) || 100,
+            price: parseFloat(p.price) || 0.99,
+            image: p.image || null,
+            category: p.category || 'NORMAL',
+            badge: p.badge || null,
+            isActive: true,
+          },
+        });
+      }
+    } else if (autoSeedPackages !== false) {
+      const defaultTiers = [
+        { name: '50 Diamonds', amount: 50, price: 0.99, badge: null, category: 'NORMAL' },
+        { name: '100+10 Diamonds', amount: 110, price: 1.99, badge: 'Popular', category: 'NORMAL' },
+        { name: '250+25 Diamonds', amount: 275, price: 4.99, badge: 'Hot', category: 'NORMAL' },
+        { name: '500+65 Diamonds', amount: 565, price: 9.99, badge: '🔥 Best Value', category: 'BEST_SELLER' },
+        { name: '1000+150 Diamonds', amount: 1150, price: 19.99, badge: 'VIP Choice', category: 'BEST_SELLER' },
+        { name: '2000+350 Diamonds', amount: 2350, price: 39.99, badge: 'Mega Saver', category: 'BEST_SELLER' },
+      ];
+      for (const tier of defaultTiers) {
+        await prisma.package.create({
+          data: {
+            productId: product.id,
+            name: tier.name,
+            amount: tier.amount,
+            price: tier.price,
+            badge: tier.badge,
+            category: tier.category,
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    const fullProduct = await prisma.product.findUnique({
+      where: { id: product.id },
+      include: {
+        packages: {
+          orderBy: { price: 'asc' },
+        },
+      },
+    });
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_CREATED', { product: fullProduct });
+
+    return res.status(201).json(fullProduct);
   } catch (error: any) {
     console.error('Error creating product:', error);
-    if (error.code === 'P2002') {
-      return res.status(400).json({ error: 'Product slug already exists' });
-    }
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
   }
 });
 

@@ -324,38 +324,101 @@ router.post('/stock', async (req: AuthenticatedRequest, res: Response) => {
 // 6. Product management: Add a new game product
 router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, category, image } = req.body;
+    const { name, category, image, slug: customSlug, packages, autoSeedPackages } = req.body;
 
     if (!name || !category) {
       return res.status(400).json({ error: 'Product name and category are required' });
     }
 
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    let baseSlug = (customSlug || name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    if (!baseSlug) baseSlug = `game-${Date.now()}`;
 
-    // Check if slug already exists
-    const existing = await prisma.product.findUnique({ where: { slug } });
-    if (existing) {
-      return res.status(400).json({ error: `A product with slug '${slug}' already exists` });
+    // Check if slug exists, find unique slug if needed
+    let finalSlug = baseSlug;
+    let counter = 1;
+    while (await prisma.product.findUnique({ where: { slug: finalSlug } })) {
+      finalSlug = `${baseSlug}-${counter++}`;
     }
+
+    const finalImage = image && image.trim() ? image.trim() : `/images/games/${finalSlug}.png`;
 
     const newProduct = await prisma.product.create({
       data: {
-        name,
-        slug,
-        category,
-        image: image || `/images/games/${slug}.png`,
+        name: name.trim(),
+        slug: finalSlug,
+        category: category.trim(),
+        image: finalImage,
         isActive: true,
       },
     });
 
-    console.log(`[Admin Dashboard] Product created: "${newProduct.name}" (Slug: ${slug})`);
+    // Auto-create default packages if packages array not passed or empty
+    const createdPackages = [];
+    if (Array.isArray(packages) && packages.length > 0) {
+      for (const p of packages) {
+        const cp = await prisma.package.create({
+          data: {
+            productId: newProduct.id,
+            name: p.name || `${p.amount || 100} Diamonds`,
+            amount: parseInt(p.amount, 10) || 100,
+            price: parseFloat(p.price) || 0.99,
+            image: p.image || null,
+            category: p.category || 'NORMAL',
+            badge: p.badge || null,
+            isActive: true,
+          },
+        });
+        createdPackages.push(cp);
+      }
+    } else if (autoSeedPackages !== false) {
+      // Auto-provision 6 high quality starter packages for seamless immediate topup functionality
+      const defaultTiers = [
+        { name: '50 Diamonds', amount: 50, price: 0.99, badge: null, category: 'NORMAL' },
+        { name: '100+10 Diamonds', amount: 110, price: 1.99, badge: 'Popular', category: 'NORMAL' },
+        { name: '250+25 Diamonds', amount: 275, price: 4.99, badge: 'Hot', category: 'NORMAL' },
+        { name: '500+65 Diamonds', amount: 565, price: 9.99, badge: '🔥 Best Value', category: 'BEST_SELLER' },
+        { name: '1000+150 Diamonds', amount: 1150, price: 19.99, badge: 'VIP Choice', category: 'BEST_SELLER' },
+        { name: '2000+350 Diamonds', amount: 2350, price: 39.99, badge: 'Mega Saver', category: 'BEST_SELLER' },
+      ];
+      for (const tier of defaultTiers) {
+        const cp = await prisma.package.create({
+          data: {
+            productId: newProduct.id,
+            name: tier.name,
+            amount: tier.amount,
+            price: tier.price,
+            badge: tier.badge,
+            category: tier.category,
+            isActive: true,
+          },
+        });
+        createdPackages.push(cp);
+      }
+    }
+
+    const fullProduct = await prisma.product.findUnique({
+      where: { id: newProduct.id },
+      include: {
+        packages: {
+          orderBy: { price: 'asc' },
+        },
+      },
+    });
+
+    // Realtime broadcast to Supabase
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_CREATED', { product: fullProduct });
+
+    console.log(`[Admin Dashboard] Product created: "${newProduct.name}" (Slug: ${finalSlug}, Packages: ${createdPackages.length})`);
     return res.status(201).json({
       message: 'Product created successfully',
-      product: newProduct,
+      product: fullProduct,
     });
   } catch (error: any) {
     console.error('Admin add product error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
   }
 });
 
@@ -387,6 +450,9 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
         badge: badge || null,
       },
     });
+
+    // Realtime Supabase broadcast
+    broadcastRealtimeEvent('products-catalog-realtime', 'PACKAGE_CREATED', { package: newPackage, productId });
 
     console.log(`[Admin Dashboard] Package created under ${product.name}: "${newPackage.name}" ($${newPackage.price})`);
     return res.status(201).json({
