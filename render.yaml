@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: daratopup-backend
+    name: nadybackend
     env: node
     region: singapore
     plan: free
@@ -14,11 +14,11 @@ services:
       - key: PORT
         value: 5000
       - key: SANDBOX_MODE
-        value: "true"
+        value: "false"
       - key: BACKEND_URL
-        value: https://daratopup-backend-1.onrender.com
+        value: https://nadybackend.onrender.com
       - key: FRONTEND_URL
-        value: https://daratopup-frontend.onrender.com
+        value: https://nadyfrontend.onrender.com
       - key: ADMIN_EMAIL
         value: mdara9695@gmail.com
       # IMPORTANT: Set DATABASE_URL in Render dashboard!
