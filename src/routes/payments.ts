@@ -17,9 +17,14 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(400).json({ error: 'Required fields missing' });
     }
 
-    if (paymentMethod !== 'ABA' && paymentMethod !== 'BAKONG' && paymentMethod !== 'CANADIA') {
-      return res.status(400).json({ error: 'Invalid payment method. Use ABA, BAKONG, or CANADIA' });
+    let normalizedMethod = (paymentMethod || '').toUpperCase().trim();
+    if (normalizedMethod === 'KHQR' || normalizedMethod === 'BAKONG_KHQR') normalizedMethod = 'BAKONG';
+    if (normalizedMethod === 'ABA_PAYWAY') normalizedMethod = 'ABA';
+
+    if (!['ABA', 'BAKONG', 'CANADIA', 'CUTLUY', 'WALLET'].includes(normalizedMethod)) {
+      normalizedMethod = 'BAKONG'; // Default to Bakong KHQR
     }
+    const resolvedMethod = normalizedMethod;
 
     // Fetch the package details
     const pkg = await prisma.package.findUnique({
@@ -59,9 +64,38 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
       try {
         const decoded = require('jsonwebtoken').verify(token, JWT_SECRET) as { id: string; email: string };
         userId = decoded.id;
-        contactEmail = decoded.email;
+        contactEmail = decoded.email || contactEmail;
       } catch (err) {
-        // Ignore invalid token and create as guest
+        // Fallback: Check if token is a Supabase Auth or Google JWT token
+        try {
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const decoded: any = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+            if (decoded) {
+              userId = decoded.sub || decoded.id || null;
+              contactEmail = decoded.email || contactEmail;
+            }
+          }
+        } catch {
+          // Ignore invalid token and create as guest
+        }
+      }
+    }
+
+    // Safely verify if userId exists in PostgreSQL DB to avoid foreign key violations
+    if (userId) {
+      try {
+        const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+        if (!userExists) {
+          if (contactEmail && contactEmail !== 'guest@topup.com') {
+            const userByEmail = await prisma.user.findUnique({ where: { email: contactEmail }, select: { id: true } });
+            userId = userByEmail ? userByEmail.id : null;
+          } else {
+            userId = null;
+          }
+        }
+      } catch {
+        userId = null;
       }
     }
 
@@ -71,7 +105,7 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
     let paymentMd5: string | null = null;
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
-    if (paymentMethod === 'ABA') {
+    if (resolvedMethod === 'ABA') {
       const abaMerchantId = process.env.ABA_PAYWAY_MERCHANT_ID || 'MOCK_MERCHANT';
       const abaApiKey = process.env.ABA_PAYWAY_API_KEY || 'MOCK_KEY';
       paymentDetails = generateABAMockPayment(
@@ -82,7 +116,7 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
         abaApiKey,
         baseUrl
       );
-    } else if (paymentMethod === 'CANADIA') {
+    } else if (resolvedMethod === 'CANADIA') {
       const qrData = `00020101021230480012canadia_topup0110topup@cnb5204599953038405404${pkg.price.toFixed(2)}5802KH5919CANADIA BANK PLC.6008Phnom Penh62180710${paymentTxnId}6304E5F6`;
       const md5 = require('crypto').createHash('md5').update(qrData).digest('hex');
       paymentQrCode = qrData;
@@ -118,7 +152,7 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
         playerNickname: nickname,
         price: pkg.price,
         status: 'PENDING',
-        paymentMethod,
+        paymentMethod: resolvedMethod,
         paymentStatus: 'PENDING',
         paymentTxnId,
         paymentQrCode,
