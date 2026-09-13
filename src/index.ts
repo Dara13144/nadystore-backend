@@ -18,6 +18,7 @@ if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
 // Route Imports
 import authRouter from './routes/auth';
 import productsRouter from './routes/products';
+import packagesRouter from './routes/packages';
 import ordersRouter from './routes/orders';
 import adminRouter from './routes/admin';
 import paymentsRouter from './routes/payments';
@@ -141,6 +142,8 @@ app.get('/api/db-health', async (req, res) => {
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
+app.use('/api/packages', packagesRouter);
+app.use('/api/package', packagesRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/security', securityRouter);

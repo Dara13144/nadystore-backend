@@ -19,6 +19,7 @@ if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
 // Route Imports
 const auth_1 = __importDefault(require("./routes/auth"));
 const products_1 = __importDefault(require("./routes/products"));
+const packages_1 = __importDefault(require("./routes/packages"));
 const orders_1 = __importDefault(require("./routes/orders"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const payments_1 = __importDefault(require("./routes/payments"));
@@ -131,6 +132,8 @@ app.get('/api/db-health', async (req, res) => {
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', auth_1.default);
 app.use('/api/products', products_1.default);
+app.use('/api/packages', packages_1.default);
+app.use('/api/package', packages_1.default);
 app.use('/api/orders', orders_1.default);
 app.use('/api/admin', admin_1.default);
 app.use('/api/security', security_1.default);
