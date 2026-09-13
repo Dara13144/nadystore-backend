@@ -27,43 +27,72 @@ router.post('/', async (req, res) => {
             normalizedMethod = 'BAKONG'; // Default to Bakong KHQR
         }
         const resolvedMethod = normalizedMethod;
-        // Resilient Package Resolution
+        // 1. Direct ID & Name search
         let pkg = null;
         if (packageId) {
-            pkg = await prisma_1.default.package.findUnique({
-                where: { id: packageId },
-                include: { product: true },
-            }).catch(() => null);
-        }
-        if (!pkg && packageId) {
             pkg = await prisma_1.default.package.findFirst({
                 where: {
                     OR: [
                         { id: packageId },
-                        { name: packageId },
+                        { name: { equals: packageId, mode: 'insensitive' } },
                     ],
                 },
                 include: { product: true },
             }).catch(() => null);
         }
-        const targetSlug = productSlug || gameSlug;
-        if (!pkg && targetSlug) {
-            const prod = await prisma_1.default.product.findFirst({
-                where: {
-                    OR: [
-                        { slug: targetSlug },
-                        { id: targetSlug },
-                        { name: { equals: targetSlug, mode: 'insensitive' } },
-                    ],
-                },
-                include: { packages: true },
-            }).catch(() => null);
+        // 2. Extract potential slug if packageId has format like "free-fire-1"
+        let targetSlug = productSlug || gameSlug;
+        if (!targetSlug && packageId && packageId.includes('-')) {
+            targetSlug = packageId.replace(/-\d+$/, '');
+        }
+        // 3. Find Product and match or auto-provision package
+        if (!pkg) {
+            let prod = null;
+            if (targetSlug) {
+                prod = await prisma_1.default.product.findFirst({
+                    where: {
+                        OR: [
+                            { slug: targetSlug },
+                            { id: targetSlug },
+                            { name: { equals: targetSlug, mode: 'insensitive' } },
+                            { slug: { contains: targetSlug, mode: 'insensitive' } },
+                        ],
+                    },
+                    include: { packages: true },
+                }).catch(() => null);
+            }
+            // If still no product, search for any active product in database
+            if (!prod) {
+                prod = await prisma_1.default.product.findFirst({
+                    where: { isActive: true },
+                    include: { packages: true },
+                    orderBy: { createdAt: 'asc' },
+                }).catch(() => null);
+            }
+            // If no product exists in DB at all, create default product
+            if (!prod) {
+                const fallbackSlug = targetSlug || 'free-fire';
+                const fallbackName = fallbackSlug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+                prod = await prisma_1.default.product.create({
+                    data: {
+                        name: fallbackName,
+                        slug: fallbackSlug,
+                        category: 'MOBILE_GAME',
+                        image: `/images/games/${fallbackSlug}.png`,
+                        isActive: true,
+                    },
+                    include: { packages: true },
+                }).catch(() => null);
+            }
             if (prod) {
                 if (packageName) {
                     pkg = prod.packages.find((p) => p.name.toLowerCase() === packageName.toLowerCase()) || null;
                 }
                 if (!pkg && price) {
                     pkg = prod.packages.find((p) => Math.abs(p.price - parseFloat(price)) < 0.05) || null;
+                }
+                if (!pkg && amount) {
+                    pkg = prod.packages.find((p) => p.amount === parseInt(String(amount), 10)) || null;
                 }
                 if (!pkg && prod.packages.length > 0) {
                     pkg = prod.packages[0];
@@ -75,18 +104,18 @@ router.post('/', async (req, res) => {
                     }).catch(() => null);
                 }
                 else {
-                    // If no package exists yet, create on the fly
-                    const newPkg = await prisma_1.default.package.create({
+                    // Provision missing package on the fly
+                    pkg = await prisma_1.default.package.create({
                         data: {
                             productId: prod.id,
-                            name: packageName || `${amount || 60} Diamonds`,
-                            amount: parseInt(amount || 60, 10),
-                            price: parseFloat(price || 0.99),
+                            name: packageName || `${amount || 50} Diamonds`,
+                            amount: parseInt(String(amount || 50), 10),
+                            price: parseFloat(String(price || 0.99)),
                             category: 'NORMAL',
+                            isActive: true,
                         },
                         include: { product: true },
                     }).catch(() => null);
-                    pkg = newPkg;
                 }
             }
         }
