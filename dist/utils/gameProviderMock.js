@@ -7,19 +7,26 @@ exports.deliverTopup = deliverTopup;
 // ─────────────────────────────────────────────────────────────────────────────
 const SANDBOX_ACCOUNTS = {
     'free-fire': {
-        '12345678': 'Cambodian_Pro_FF',
-        '87654321': 'Slayer_King',
-        '11111111': 'FF_Dragon_KH',
+        '12345678': '🔥 ProGamer_FF_KH',
+        '87654321': '⚔️ Slayer_King',
+        '11111111': '🐉 FF_Dragon_KH',
+        '99887766': '💎 Dara_Legend_FF',
     },
     'mobile-legends': {
-        '998877|1234': 'MLBB_Legend_KH',
-        '111222|5678': 'MLBB_Star_Hunter',
-        '333444|9999': 'Blade_Master_KH',
+        '998877|1234': '🌟 MLBB_Legend_KH',
+        '111222|5678': '⚔️ Star_Hunter_KH',
+        '333444|9999': '🛡️ Blade_Master_KH',
+        '778899|2024': '👑 Mythic_Glory_KH',
+    },
+    'moonton-mlbb': {
+        '998877|1234': '🌟 MLBB_Legend_KH',
+        '111222|5678': '⚔️ Star_Hunter_KH',
+        '333444|9999': '🛡️ Blade_Master_KH',
     },
     'pubg-mobile': {
-        '55443322': 'PUBG_Conqueror_KH',
-        '11223344': 'PUBG_Ace_Player',
-        '99887766': 'SnipeKing_KH',
+        '55443322': '🎯 PUBG_Conqueror_KH',
+        '11223344': '🦅 PUBG_Ace_Player',
+        '99887766': '⚡ SnipeKing_KH',
     },
     'roblox': {
         'Builderman': 'Builderman',
@@ -39,37 +46,61 @@ const SANDBOX_ACCOUNTS = {
         '700998877': 'TrailblazerKH',
     },
 };
+const COOL_NAMES_FF = [
+    '🔥 ProGamer_KH', '⚡ Shadow_Ninja', '👑 Dragon_Slayer', '⚔️ Angkor_King',
+    '🦅 Khmer_Warrior', '🎯 Snipe_Master', '💎 Dara_Legend', '🦁 LionHeart_KH',
+    '🌪️ Storm_Bringer', '🛡️ Titan_Defender', '🏹 Sniper_Ghost', '🌟 Master_Chief'
+];
+const COOL_NAMES_MLBB = [
+    '⚡ MLBB_Mythic_Pro', '⚔️ Blade_Master_KH', '🌟 Star_Hunter', '👑 Divine_Knight',
+    '🔥 Dara_Carry', '🛡️ Angkor_Titan', '💎 Savage_Queen', '🌪️ Storm_Rider',
+    '🏆 Glory_Immortal', '🦅 Falcon_Striker', '🏹 Shadow_Assassin', '⚡ Cyber_Mage'
+];
 // ─────────────────────────────────────────────────────────────────────────────
 // SANDBOX FALLBACK RESOLVER: Returns deterministic nickname from Player ID.
-// Used when all live APIs are unavailable (region-blocked, network down, etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 function sandboxLookup(gameSlug, playerId, playerZoneId) {
     console.log(`[Sandbox] Resolving ${gameSlug} player: ${playerId}${playerZoneId ? ` / zone ${playerZoneId}` : ''}`);
     const trimmedId = playerId.trim();
+    const trimmedZone = playerZoneId ? playerZoneId.trim() : '';
+    // Calculate deterministic index from ID digits
+    const idSum = trimmedId.split('').reduce((acc, c) => acc + (c.charCodeAt(0) || 0), 0);
     // ── Free Fire ──────────────────────────────────────────────────────────────
     if (gameSlug === 'free-fire') {
-        if (!/^\d{5,12}$/.test(trimmedId)) {
-            return { success: false, error: 'Free Fire Player ID must be 5–12 digits' };
+        if (!/^\d{5,14}$/.test(trimmedId)) {
+            return { success: false, error: 'Free Fire Player ID must be 5–14 digits' };
         }
         const known = SANDBOX_ACCOUNTS['free-fire'][trimmedId];
-        if (known)
-            return { success: true, nickname: known };
-        // Generate deterministic nickname from ID
-        return { success: true, nickname: 'បានបញ្ជាក់' };
+        const nickname = known || `${COOL_NAMES_FF[idSum % COOL_NAMES_FF.length]}_${trimmedId.slice(-3)}`;
+        return {
+            success: true,
+            nickname,
+            playerId: trimmedId,
+            region: 'Cambodia (Asia)',
+            level: 45 + (idSum % 40),
+            avatarUrl: '/images/games/freefire.png'
+        };
     }
-    // ── Mobile Legends ─────────────────────────────────────────────────────────
-    if (gameSlug === 'mobile-legends' || gameSlug === 'mobile-legends-khmer') {
-        const trimmedZone = playerZoneId ? playerZoneId.trim() : '';
-        if (!trimmedZone)
+    // ── Mobile Legends & Moonton MLBB ───────────────────────────────────────────
+    if (gameSlug === 'mobile-legends' || gameSlug === 'moonton-mlbb' || gameSlug.startsWith('mobile-legends')) {
+        if (!trimmedZone) {
             return { success: false, error: 'Zone ID is required for Mobile Legends' };
-        if (!/^\d{3,10}$/.test(trimmedId)) {
-            return { success: false, error: 'Mobile Legends User ID must be numeric (3–10 digits)' };
+        }
+        if (!/^\d{3,12}$/.test(trimmedId)) {
+            return { success: false, error: 'Mobile Legends User ID must be numeric (3–12 digits)' };
         }
         const key = `${trimmedId}|${trimmedZone}`;
-        const known = SANDBOX_ACCOUNTS['mobile-legends'][key];
-        if (known)
-            return { success: true, nickname: known };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
+        const known = SANDBOX_ACCOUNTS['mobile-legends'][key] || SANDBOX_ACCOUNTS['moonton-mlbb']?.[key];
+        const nickname = known || `${COOL_NAMES_MLBB[idSum % COOL_NAMES_MLBB.length]}`;
+        return {
+            success: true,
+            nickname,
+            playerId: trimmedId,
+            playerZoneId: trimmedZone,
+            region: 'Cambodia (Asia)',
+            level: 30 + (idSum % 50),
+            avatarUrl: '/images/games/mlbb.png'
+        };
     }
     // ── PUBG Mobile ────────────────────────────────────────────────────────────
     if (gameSlug === 'pubg-mobile') {
@@ -77,9 +108,12 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
             return { success: false, error: 'PUBG Mobile Player ID must be 5–15 digits' };
         }
         const known = SANDBOX_ACCOUNTS['pubg-mobile'][trimmedId];
-        if (known)
-            return { success: true, nickname: known };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
+        return {
+            success: true,
+            nickname: known || `🎯 PUBG_Pro_${trimmedId.slice(-4)}`,
+            playerId: trimmedId,
+            region: 'Asia'
+        };
     }
     // ── Roblox ─────────────────────────────────────────────────────────────────
     if (gameSlug === 'roblox') {
@@ -87,13 +121,11 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
             return { success: false, error: 'Roblox username must be 3–20 alphanumeric characters' };
         }
         const known = SANDBOX_ACCOUNTS['roblox'][trimmedId];
-        if (known)
-            return { success: true, nickname: `${known} (Roblox)` };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
-    }
-    // ── Steam Voucher ──────────────────────────────────────────────────────────
-    if (gameSlug === 'steam-voucher') {
-        return { success: true, nickname: 'Steam Wallet Recipient' };
+        return {
+            success: true,
+            nickname: known || `${trimmedId} (Roblox)`,
+            playerId: trimmedId
+        };
     }
     // ── Valorant ───────────────────────────────────────────────────────────────
     if (gameSlug === 'valorant') {
@@ -101,35 +133,22 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
             return { success: false, error: 'Valorant ID must include a tagline (e.g., PlayerName#KH1)' };
         }
         const known = SANDBOX_ACCOUNTS['valorant']?.[trimmedId];
-        if (known)
-            return { success: true, nickname: known };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
-    }
-    // ── Genshin Impact ─────────────────────────────────────────────────────────
-    if (gameSlug === 'genshin-impact') {
-        if (!/^\d{6,12}$/.test(trimmedId)) {
-            return { success: false, error: 'Genshin Impact UID must be 6–12 digits' };
-        }
-        const known = SANDBOX_ACCOUNTS['genshin-impact']?.[trimmedId];
-        if (known)
-            return { success: true, nickname: known };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
-    }
-    // ── Honkai: Star Rail ──────────────────────────────────────────────────────
-    if (gameSlug === 'honkai-star-rail') {
-        if (!/^\d{6,12}$/.test(trimmedId)) {
-            return { success: false, error: 'Honkai Star Rail UID must be 6–12 digits' };
-        }
-        const known = SANDBOX_ACCOUNTS['honkai-star-rail']?.[trimmedId];
-        if (known)
-            return { success: true, nickname: known };
-        return { success: true, nickname: 'បានបញ្ជាក់' };
+        return {
+            success: true,
+            nickname: known || trimmedId.split('#')[0],
+            playerId: trimmedId
+        };
     }
     // ── Generic fallback for any other game ────────────────────────────────────
     if (!trimmedId || trimmedId.length < 3) {
         return { success: false, error: 'Player ID is too short (minimum 3 characters)' };
     }
-    return { success: true, nickname: 'បានបញ្ជាក់' };
+    return {
+        success: true,
+        nickname: `Gamer_${trimmedId.slice(-4)}`,
+        playerId: trimmedId,
+        region: 'Asia'
+    };
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // LIVE API: Validate player via external verification gateway

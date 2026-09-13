@@ -2,6 +2,11 @@ export interface LookupResult {
     success: boolean;
     nickname?: string;
     error?: string;
+    avatarUrl?: string;
+    region?: string;
+    level?: string | number;
+    playerId?: string;
+    playerZoneId?: string;
 }
 export interface DeliveryResult {
     success: boolean;

@@ -23,10 +23,10 @@ export declare function processVerifiedPayment(order: any, gatewayRef: string): 
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        price: number;
-        packageId: string;
         playerId: string;
         playerZoneId: string | null;
+        price: number;
+        packageId: string;
         userId: string | null;
         playerNickname: string | null;
         status: string;
