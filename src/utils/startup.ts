@@ -497,39 +497,17 @@ export async function runDatabaseStartup(): Promise<void> {
   }
 
   try {
-    if (isProd) {
-      console.log('[Startup] Running prisma migrate deploy...');
-      try {
-        execSync(`npx prisma migrate deploy --schema="${schemaPath}"`, {
-          cwd: backendRoot,
-          stdio: 'pipe',
-          env: { ...process.env },
-          timeout: 60_000,
-        });
-        console.log('[Startup] ✅ Database migrations applied successfully.');
-      } catch (migrateErr: any) {
-        console.warn('[Startup] Migrate deploy warning, falling back to db push:', migrateErr.message);
-        execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate --accept-data-loss`, {
-          cwd: backendRoot,
-          stdio: 'pipe',
-          env: { ...process.env },
-          timeout: 60_000,
-        });
-        console.log('[Startup] ✅ Database schema pushed successfully.');
-      }
-    } else {
-      console.log('[Startup] Syncing SQLite schema (prisma db push)...');
-      execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate --accept-data-loss`, {
-        cwd: backendRoot,
-        stdio: 'pipe',
-        env: { ...process.env },
-        timeout: 60_000,
-      });
-      console.log('[Startup] ✅ Local database schema synchronized.');
-    }
+    console.log('[Startup] Synchronizing database schema (prisma db push)...');
+    execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate --accept-data-loss`, {
+      cwd: backendRoot,
+      stdio: 'pipe',
+      env: { ...process.env },
+      timeout: 60_000,
+    });
+    console.log('[Startup] ✅ Database schema synchronized successfully.');
   } catch (err: any) {
     const msg = (err.stderr?.toString() || err.stdout?.toString() || err.message || '').trim();
-    console.warn('[Startup] Database init warning (non-fatal):', msg.substring(0, 300));
+    console.warn('[Startup] Database sync note:', msg.substring(0, 300));
   }
 
   try {
