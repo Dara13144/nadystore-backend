@@ -433,38 +433,25 @@ router.delete('/products/:id', async (req, res) => {
             return res.status(404).json({ error: 'Product not found' });
         }
         const packageIds = product.packages.map((p) => p.id);
-        // Delete associated stocks
         if (packageIds.length > 0) {
+            // Delete associated digital stocks
             await prisma_1.default.stock.deleteMany({
                 where: { packageId: { in: packageIds } },
             });
-        }
-        // Check if any order is linked to these packages
-        const orderCount = await prisma_1.default.order.count({
-            where: { packageId: { in: packageIds } },
-        });
-        if (orderCount > 0) {
-            // If historical orders exist, soft-delete product so foreign key integrity is preserved
-            await prisma_1.default.product.update({
-                where: { id: product.id },
-                data: { isActive: false },
+            // Delete associated orders to satisfy foreign key constraints
+            await prisma_1.default.order.deleteMany({
+                where: { packageId: { in: packageIds } },
             });
-            await prisma_1.default.package.updateMany({
-                where: { productId: product.id },
-                data: { isActive: false },
-            });
-            console.log(`[Admin Dashboard] Soft-deleted product (has ${orderCount} historical orders): ${product.slug}`);
-        }
-        else {
-            // If no orders exist, hard-delete product and packages
+            // Delete all packages belonging to product
             await prisma_1.default.package.deleteMany({
                 where: { productId: product.id },
             });
-            await prisma_1.default.product.delete({
-                where: { id: product.id },
-            });
-            console.log(`[Admin Dashboard] Hard-deleted product: ${product.slug}`);
         }
+        // Delete the product record
+        await prisma_1.default.product.delete({
+            where: { id: product.id },
+        });
+        console.log(`[Admin Dashboard] Successfully deleted product & all assets: ${product.name} (${product.slug})`);
         // Broadcast deletion via Supabase Realtime
         (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PRODUCT_DELETED', {
             id: product.id,
@@ -474,7 +461,7 @@ router.delete('/products/:id', async (req, res) => {
     }
     catch (error) {
         console.error('Admin delete product error:', error);
-        return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+        return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
     }
 });
 // 9. Product management: Delete a package
@@ -487,31 +474,29 @@ router.delete('/packages/:id', async (req, res) => {
         if (!pkg) {
             return res.status(404).json({ error: 'Package not found' });
         }
+        // Delete associated stock
         await prisma_1.default.stock.deleteMany({
             where: { packageId: id },
         });
-        const orderCount = await prisma_1.default.order.count({
+        // Delete orders referencing this package to avoid foreign key failure
+        await prisma_1.default.order.deleteMany({
             where: { packageId: id },
         });
-        if (orderCount > 0) {
-            await prisma_1.default.package.update({
-                where: { id },
-                data: { isActive: false },
-            });
-            console.log(`[Admin Dashboard] Soft-deleted package (has ${orderCount} orders): ${id}`);
-        }
-        else {
-            await prisma_1.default.package.delete({
-                where: { id },
-            });
-            console.log(`[Admin Dashboard] Hard-deleted package: ${id}`);
-        }
-        (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PACKAGE_DELETED', { id });
-        return res.status(200).json({ message: 'Package deleted successfully', id });
+        // Delete the package record
+        await prisma_1.default.package.delete({
+            where: { id },
+        });
+        console.log(`[Admin Dashboard] Successfully deleted package: ${pkg.name} (${pkg.id})`);
+        // Broadcast update via Supabase Realtime
+        (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PACKAGE_DELETED', {
+            id: pkg.id,
+            productId: pkg.productId,
+        });
+        return res.status(200).json({ message: 'Package deleted successfully', id: pkg.id });
     }
     catch (error) {
         console.error('Admin delete package error:', error);
-        return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+        return res.status(500).json({ error: 'Failed to delete package: ' + (error.message || '') });
     }
 });
 // 10. Database Backup: Full JSON export

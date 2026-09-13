@@ -144,31 +144,23 @@ router.delete('/:id', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, r
         }
         const packageIds = product.packages.map((p) => p.id);
         if (packageIds.length > 0) {
+            // 1. Delete stocks
             await prisma_1.default.stock.deleteMany({
                 where: { packageId: { in: packageIds } },
             });
-        }
-        const orderCount = await prisma_1.default.order.count({
-            where: { packageId: { in: packageIds } },
-        });
-        if (orderCount > 0) {
-            await prisma_1.default.product.update({
-                where: { id: product.id },
-                data: { isActive: false },
+            // 2. Delete linked orders to prevent foreign key errors
+            await prisma_1.default.order.deleteMany({
+                where: { packageId: { in: packageIds } },
             });
-            await prisma_1.default.package.updateMany({
-                where: { productId: product.id },
-                data: { isActive: false },
-            });
-        }
-        else {
+            // 3. Delete packages
             await prisma_1.default.package.deleteMany({
                 where: { productId: product.id },
             });
-            await prisma_1.default.product.delete({
-                where: { id: product.id },
-            });
         }
+        // 4. Delete product
+        await prisma_1.default.product.delete({
+            where: { id: product.id },
+        });
         (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PRODUCT_DELETED', {
             id: product.id,
             slug: product.slug,
@@ -177,7 +169,7 @@ router.delete('/:id', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, r
     }
     catch (error) {
         console.error('Error deleting product:', error);
-        return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+        return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
     }
 });
 // 7. Add Package to Product

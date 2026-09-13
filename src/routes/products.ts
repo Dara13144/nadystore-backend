@@ -155,32 +155,26 @@ router.delete('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRe
     const packageIds = product.packages.map((p) => p.id);
 
     if (packageIds.length > 0) {
+      // 1. Delete stocks
       await prisma.stock.deleteMany({
         where: { packageId: { in: packageIds } },
       });
-    }
 
-    const orderCount = await prisma.order.count({
-      where: { packageId: { in: packageIds } },
-    });
+      // 2. Delete linked orders to prevent foreign key errors
+      await prisma.order.deleteMany({
+        where: { packageId: { in: packageIds } },
+      });
 
-    if (orderCount > 0) {
-      await prisma.product.update({
-        where: { id: product.id },
-        data: { isActive: false },
-      });
-      await prisma.package.updateMany({
-        where: { productId: product.id },
-        data: { isActive: false },
-      });
-    } else {
+      // 3. Delete packages
       await prisma.package.deleteMany({
         where: { productId: product.id },
       });
-      await prisma.product.delete({
-        where: { id: product.id },
-      });
     }
+
+    // 4. Delete product
+    await prisma.product.delete({
+      where: { id: product.id },
+    });
 
     broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_DELETED', {
       id: product.id,
@@ -190,7 +184,7 @@ router.delete('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRe
     return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
   } catch (error: any) {
     console.error('Error deleting product:', error);
-    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
   }
 });
 
