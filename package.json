@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Backend API for Game Top-up Website",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "node scripts/prepare-prod.js && tsc && prisma generate",
     "start": "node dist/index.js",
@@ -16,7 +19,7 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "@supabase/supabase-js": "^2.116.0",
+    "@supabase/supabase-js": "2.49.1",
     "@types/multer": "^2.2.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
