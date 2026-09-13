@@ -62,37 +62,31 @@ app.use(securityMiddleware);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads')));
 
 // ─── Health & Root Routes ─────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    message: 'DaraTopup Backend API Server is running successfully!',
-    timestamp: new Date().toISOString(),
-    sandbox: process.env.SANDBOX_MODE === 'true',
-    version: '1.0.2',
-  });
-});
-
-app.get('/api/health', async (req, res) => {
+const healthHandler = async (req: express.Request, res: express.Response) => {
   try {
     // Quick DB ping to verify connectivity
     await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({
+    return res.status(200).json({
       status: 'healthy',
       message: 'DaraTopup Backend API Server is running successfully!',
       timestamp: new Date().toISOString(),
       sandbox: process.env.SANDBOX_MODE === 'true',
       db: 'connected',
+      version: '1.0.2',
     });
   } catch (err: any) {
-    res.status(200).json({
+    return res.status(200).json({
       status: 'healthy',
       message: 'DaraTopup Backend API Server is running successfully!',
       timestamp: new Date().toISOString(),
       sandbox: process.env.SANDBOX_MODE === 'true',
       db: 'error: ' + err.message,
+      version: '1.0.2',
     });
   }
-});
+};
+
+app.get(['/', '/health', '/healthy', '/healthz', '/ping', '/api', '/api/health', '/api/healthy', '/api/healthz', '/api/ping'], healthHandler);
 
 app.get('/api/db-health', async (req, res) => {
   try {
@@ -106,15 +100,6 @@ app.get('/api/db-health', async (req, res) => {
       error: err.message,
     });
   }
-});
-
-app.get('/api', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    message: 'DaraTopup Backend API Server is running successfully!',
-    timestamp: new Date().toISOString(),
-    sandbox: process.env.SANDBOX_MODE === 'true',
-  });
 });
 
 // ─── API Routes ────────────────────────────────────────────────────────────────
