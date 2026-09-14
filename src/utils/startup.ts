@@ -190,7 +190,7 @@ async function initSupabasePostgres(): Promise<void> {
     'CREATE POLICY "Allow delete on Package" ON "Package" FOR DELETE TO anon, authenticated, service_role USING (true);',
     'DROP POLICY IF EXISTS "Allow service role all on AuditLog" ON "AuditLog";',
     'CREATE POLICY "Allow service role all on AuditLog" ON "AuditLog" FOR ALL TO service_role USING (true) WITH CHECK (true);',
-    `CREATE OR REPLACE VIEW "games" AS SELECT id, name, slug, image, category, "isActive", "createdAt", "updatedAt" FROM "Product";`,
+    `CREATE OR REPLACE VIEW "games" AS SELECT id, name, slug, image, category, "isActive", "hasZoneId", "zoneIdLabel", "createdAt", "updatedAt" FROM "Product";`,
     `CREATE OR REPLACE RULE games_delete AS ON DELETE TO "games" DO INSTEAD (DELETE FROM "Product" WHERE id = OLD.id);`,
     'GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;',
     'GRANT ALL ON "Product", "Package", "games" TO anon, authenticated, service_role;',

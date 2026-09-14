@@ -7,7 +7,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "node scripts/prepare-prod.js && tsc && prisma generate",
+    "build": "node scripts/prepare-prod.js && prisma generate && tsc",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
     "db:migrate": "prisma migrate dev",

@@ -410,9 +410,9 @@ export async function lookupPlayerNickname(
     return { success: false, error: 'Player ID is required' };
   }
 
-  const baseSlug = gameSlug.startsWith('free-fire-') 
+  const baseSlug = (gameSlug.startsWith('free-fire-') || gameSlug.includes('freefire'))
     ? 'free-fire' 
-    : (gameSlug.startsWith('mobile-legends-') ? 'mobile-legends' : gameSlug);
+    : ((gameSlug.includes('mobile-legends') || gameSlug.includes('mlbb') || gameSlug.includes('moonton')) ? 'mobile-legends' : gameSlug);
 
   // Pre-check: If this ID is a pre-seeded mock sandbox account, resolve it immediately.
   if (baseSlug === 'mobile-legends') {

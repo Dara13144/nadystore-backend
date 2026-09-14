@@ -267,9 +267,10 @@ router.get('/orders', async (req, res) => {
         }
         if (search) {
             whereClause.OR = [
-                { playerId: { contains: search } },
-                { playerNickname: { contains: search } },
-                { paymentTxnId: { contains: search } },
+                { playerId: { contains: search, mode: 'insensitive' } },
+                { playerZoneId: { contains: search, mode: 'insensitive' } },
+                { playerNickname: { contains: search, mode: 'insensitive' } },
+                { paymentTxnId: { contains: search, mode: 'insensitive' } },
             ];
         }
         const orders = await prisma_1.default.order.findMany({
@@ -466,7 +467,7 @@ router.post('/stock', async (req, res) => {
 // 6. Product management: Add a new game product
 router.post('/products', async (req, res) => {
     try {
-        const { name, category, image, slug: customSlug, packages, autoSeedPackages } = req.body;
+        const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel } = req.body;
         if (!name || !category) {
             return res.status(400).json({ error: 'Product name and category are required' });
         }
@@ -490,6 +491,8 @@ router.post('/products', async (req, res) => {
                 category: category.trim(),
                 image: finalImage,
                 isActive: true,
+                hasZoneId: hasZoneId === true || hasZoneId === 'true',
+                zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
             },
         });
         // Auto-create default packages if packages array not passed or empty
@@ -607,7 +610,7 @@ router.post('/products/:productId/packages', async (req, res) => {
 router.patch(['/products/:id', '/product/:id'], async (req, res) => {
     try {
         const { id } = req.params;
-        const { image, name, category, isActive, slug } = req.body;
+        const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel } = req.body;
         let existingProduct = await prisma_1.default.product.findFirst({
             where: { OR: [{ id }, { slug: id }] },
         });
@@ -622,6 +625,10 @@ router.patch(['/products/:id', '/product/:id'], async (req, res) => {
             data.isActive = isActive;
         if (slug !== undefined)
             data.slug = slug;
+        if (hasZoneId !== undefined)
+            data.hasZoneId = hasZoneId === true || hasZoneId === 'true';
+        if (zoneIdLabel !== undefined)
+            data.zoneIdLabel = zoneIdLabel ? String(zoneIdLabel).trim() : null;
         let updated;
         if (existingProduct) {
             updated = await prisma_1.default.product.update({ where: { id: existingProduct.id }, data });
@@ -636,6 +643,8 @@ router.patch(['/products/:id', '/product/:id'], async (req, res) => {
                     category: category || 'MOBILE_GAME',
                     image: image || '/images/games/default.png',
                     isActive: isActive !== undefined ? isActive : true,
+                    hasZoneId: hasZoneId === true || hasZoneId === 'true',
+                    zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
                 },
             });
             console.log(`[Admin Dashboard] Created missing product during update: ${updated.name}`);

@@ -247,9 +247,10 @@ router.get('/orders', async (req: AuthenticatedRequest, res: Response) => {
     }
     if (search) {
       whereClause.OR = [
-        { playerId: { contains: search } },
-        { playerNickname: { contains: search } },
-        { paymentTxnId: { contains: search } },
+        { playerId: { contains: search, mode: 'insensitive' } },
+        { playerZoneId: { contains: search, mode: 'insensitive' } },
+        { playerNickname: { contains: search, mode: 'insensitive' } },
+        { paymentTxnId: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -470,7 +471,7 @@ router.post('/stock', async (req: AuthenticatedRequest, res: Response) => {
 // 6. Product management: Add a new game product
 router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, category, image, slug: customSlug, packages, autoSeedPackages } = req.body;
+    const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel } = req.body;
 
     if (!name || !category) {
       return res.status(400).json({ error: 'Product name and category are required' });
@@ -498,6 +499,8 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
         category: category.trim(),
         image: finalImage,
         isActive: true,
+        hasZoneId: hasZoneId === true || hasZoneId === 'true',
+        zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
       },
     });
 
@@ -624,7 +627,7 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
 router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { image, name, category, isActive, slug } = req.body;
+    const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel } = req.body;
 
     let existingProduct = await prisma.product.findFirst({
       where: { OR: [{ id }, { slug: id }] },
@@ -636,6 +639,8 @@ router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest
     if (category !== undefined) data.category = category;
     if (isActive !== undefined) data.isActive = isActive;
     if (slug !== undefined) data.slug = slug;
+    if (hasZoneId !== undefined) data.hasZoneId = hasZoneId === true || hasZoneId === 'true';
+    if (zoneIdLabel !== undefined) data.zoneIdLabel = zoneIdLabel ? String(zoneIdLabel).trim() : null;
 
     let updated;
     if (existingProduct) {
@@ -650,6 +655,8 @@ router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest
           category: category || 'MOBILE_GAME',
           image: image || '/images/games/default.png',
           isActive: isActive !== undefined ? isActive : true,
+          hasZoneId: hasZoneId === true || hasZoneId === 'true',
+          zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
         },
       });
       console.log(`[Admin Dashboard] Created missing product during update: ${updated.name}`);

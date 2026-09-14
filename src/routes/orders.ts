@@ -103,6 +103,14 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(404).json({ error: 'Package not found or currently inactive' });
     }
 
+    // Validate Zone ID / Server ID if required by product
+    const isMLBBGame = pkg.product.slug.includes('mobile-legends') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');
+    const requiresZone = (pkg.product as any).hasZoneId || isMLBBGame;
+    if (requiresZone && (!playerZoneId || !playerZoneId.trim())) {
+      const fieldLabel = (pkg.product as any).zoneIdLabel || (isMLBBGame ? 'Zone ID' : 'Zone ID / Server ID');
+      return res.status(400).json({ error: `${fieldLabel} is required for ${pkg.product.name}` });
+    }
+
     // Validate Player ID and retrieve nickname (non-blocking)
     let nickname = 'Player';
     try {
@@ -340,6 +348,7 @@ router.get('/status/:txnId', async (req, res) => {
       gameSlug: order.package.product.slug,
       packageName: order.package.name,
       playerId: order.playerId,
+      playerZoneId: order.playerZoneId || null,
       playerNickname: order.playerNickname,
       price: order.price,
       status: order.status,
