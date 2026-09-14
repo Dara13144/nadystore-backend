@@ -199,7 +199,7 @@ async function processVerifiedPayment(order, gatewayRef) {
             ? `🎫 <b>Voucher Code:</b> <code>${result.stockCode}</code>`
             : `📲 <b>Top-Up Delivery:</b> ${result.deliveryStatus}`;
         const productSlug = result.updated.package?.product?.slug || order.package?.product?.slug || '';
-        const isMLBB = productSlug.includes('mobile-legends');
+        const isMLBB = productSlug.includes('mobile-legend') || productSlug.includes('mlbb') || productSlug.includes('moonton');
         const isFreeFire = productSlug.includes('free-fire');
         const isValorant = productSlug.includes('valorant');
         const isBloodStrike = productSlug.includes('blood-strike');

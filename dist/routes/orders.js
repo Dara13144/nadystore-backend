@@ -10,6 +10,38 @@ const paymentMock_1 = require("../utils/paymentMock");
 const telegram_1 = require("../utils/telegram");
 const paymentVerification_1 = require("../utils/paymentVerification");
 const router = (0, express_1.Router)();
+// Check Player ID & Zone ID (Public)
+router.post('/check-player', async (req, res) => {
+    try {
+        const gameSlug = req.body?.gameSlug || req.body?.slug || '';
+        const playerId = req.body?.playerId || '';
+        const playerZoneId = req.body?.playerZoneId || req.body?.zoneId || '';
+        if (!playerId.trim()) {
+            return res.status(400).json({ success: false, error: 'Player ID is required' });
+        }
+        const result = await (0, gameProviderMock_1.lookupPlayerNickname)(gameSlug, playerId, playerZoneId);
+        if (result && result.success && result.nickname) {
+            return res.status(200).json({
+                success: true,
+                nickname: result.nickname,
+                region: result.region || 'Cambodia (Asia)',
+                level: result.level || 45,
+                avatarUrl: result.avatarUrl || '/images/games/mlbb.png',
+                playerId: playerId.trim(),
+                playerZoneId: playerZoneId.trim() || null,
+            });
+        }
+        return res.status(200).json({
+            success: false,
+            nickname: null,
+            error: result?.error || 'Player not found'
+        });
+    }
+    catch (error) {
+        console.error('Check player error:', error);
+        return res.status(500).json({ success: false, error: 'Internal lookup error' });
+    }
+});
 // 1. Create a top-up order (Public / Authenticated)
 // Matches route POST /api/orders/
 router.post('/', async (req, res) => {
@@ -96,7 +128,7 @@ router.post('/', async (req, res) => {
             return res.status(404).json({ error: 'Package not found or currently inactive' });
         }
         // Validate Zone ID / Server ID if required by product
-        const isMLBBGame = pkg.product.slug.includes('mobile-legends') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');
+        const isMLBBGame = pkg.product.slug.includes('mobile-legend') || pkg.product.slug.includes('mlbb') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');
         const requiresZone = pkg.product.hasZoneId || isMLBBGame;
         if (requiresZone && (!playerZoneId || !playerZoneId.trim())) {
             const fieldLabel = pkg.product.zoneIdLabel || (isMLBBGame ? 'Zone ID' : 'Zone ID / Server ID');

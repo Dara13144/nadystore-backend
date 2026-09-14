@@ -13,12 +13,31 @@ const SANDBOX_ACCOUNTS = {
         '99887766': '💎 Dara_Legend_FF',
     },
     'mobile-legends': {
+        '12345678|1234': '⚔️ MLBB_Pro_Gamer',
+        '123456789|1234': '🌟 MLBB_Legend_KH',
+        '123456|1234': '💎 MLBB_Mythic_Player',
         '998877|1234': '🌟 MLBB_Legend_KH',
         '111222|5678': '⚔️ Star_Hunter_KH',
         '333444|9999': '🛡️ Blade_Master_KH',
         '778899|2024': '👑 Mythic_Glory_KH',
+        '888888|8888': '🔥 MLBB_Glory_KH',
+        '999999|9999': '⚡ MLBB_Immortal_KH',
+        '555555|5555': '🎯 MLBB_Sharpshooter',
+    },
+    'mobile-legend': {
+        '12345678|1234': '⚔️ MLBB_Pro_Gamer',
+        '123456789|1234': '🌟 MLBB_Legend_KH',
+        '123456|1234': '💎 MLBB_Mythic_Player',
+        '998877|1234': '🌟 MLBB_Legend_KH',
+        '111222|5678': '⚔️ Star_Hunter_KH',
+        '333444|9999': '🛡️ Blade_Master_KH',
+        '778899|2024': '👑 Mythic_Glory_KH',
+        '888888|8888': '🔥 MLBB_Glory_KH',
+        '999999|9999': '⚡ MLBB_Immortal_KH',
+        '555555|5555': '🎯 MLBB_Sharpshooter',
     },
     'moonton-mlbb': {
+        '12345678|1234': '⚔️ MLBB_Pro_Gamer',
         '998877|1234': '🌟 MLBB_Legend_KH',
         '111222|5678': '⚔️ Star_Hunter_KH',
         '333444|9999': '🛡️ Blade_Master_KH',
@@ -66,7 +85,7 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
     // Calculate deterministic index from ID digits
     const idSum = trimmedId.split('').reduce((acc, c) => acc + (c.charCodeAt(0) || 0), 0);
     // ── Free Fire ──────────────────────────────────────────────────────────────
-    if (gameSlug === 'free-fire') {
+    if (gameSlug === 'free-fire' || gameSlug.startsWith('free-fire') || gameSlug.includes('freefire')) {
         if (!/^\d{5,14}$/.test(trimmedId)) {
             return { success: false, error: 'Free Fire Player ID must be 5–14 digits' };
         }
@@ -82,7 +101,7 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
         };
     }
     // ── Mobile Legends & Moonton MLBB ───────────────────────────────────────────
-    if (gameSlug === 'mobile-legends' || gameSlug === 'moonton-mlbb' || gameSlug.startsWith('mobile-legends')) {
+    if (gameSlug.includes('mobile-legend') || gameSlug.includes('mlbb') || gameSlug.includes('moonton')) {
         if (!trimmedZone) {
             return { success: false, error: 'Zone ID is required for Mobile Legends' };
         }
@@ -90,7 +109,9 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
             return { success: false, error: 'Mobile Legends User ID must be numeric (3–12 digits)' };
         }
         const key = `${trimmedId}|${trimmedZone}`;
-        const known = SANDBOX_ACCOUNTS['mobile-legends'][key] || SANDBOX_ACCOUNTS['moonton-mlbb']?.[key];
+        const known = SANDBOX_ACCOUNTS['mobile-legends']?.[key] ||
+            SANDBOX_ACCOUNTS['mobile-legend']?.[key] ||
+            SANDBOX_ACCOUNTS['moonton-mlbb']?.[key];
         const nickname = known || `${COOL_NAMES_MLBB[idSum % COOL_NAMES_MLBB.length]}`;
         return {
             success: true,
@@ -165,7 +186,7 @@ async function vngzz2gameLookup(gameSlug, playerId, playerZoneId) {
     if (slugLower.includes('free-fire') || slugLower.includes('freefire')) {
         gameCode = slugLower.includes('global') ? 'freefire_global' : 'freefire_sgmy';
     }
-    else if (slugLower.includes('mobile-legends') || slugLower.includes('mlbb')) {
+    else if (slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton')) {
         gameCode = slugLower.includes('global') ? 'mlbb_global' : 'mlbb';
     }
     else if (slugLower.includes('pubg')) {
@@ -303,7 +324,8 @@ async function robloxLiveLookup(username) {
 async function mrxApiLookup(gameSlug, playerId, playerZoneId) {
     try {
         const payload = { userId: playerId.trim() };
-        if ((gameSlug === 'mobile-legends' || gameSlug.startsWith('mobile-legends-')) && playerZoneId) {
+        const isMLBB = gameSlug.includes('mobile-legend') || gameSlug.includes('mlbb') || gameSlug.includes('moonton');
+        if (isMLBB && playerZoneId) {
             payload.zoneId = playerZoneId.trim();
         }
         const url = 'https://www.mrxtopup.com/api/check-user';
@@ -316,7 +338,7 @@ async function mrxApiLookup(gameSlug, playerId, playerZoneId) {
                 'Content-Type': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, fill: true) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'application/json',
-                'Referer': (gameSlug === 'mobile-legends' || gameSlug.startsWith('mobile-legends-')) ? 'https://www.mrxtopup.com/topup/mlbb' : 'https://www.mrxtopup.com/topup/ff',
+                'Referer': isMLBB ? 'https://www.mrxtopup.com/topup/mlbb' : 'https://www.mrxtopup.com/topup/ff',
                 'Origin': 'https://www.mrxtopup.com',
             },
             body: JSON.stringify(payload),
@@ -341,7 +363,7 @@ async function mrxApiLookup(gameSlug, playerId, playerZoneId) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT: lookupPlayerNickname
-// Strategy: VNGZZ2GAME Live API → mrxtopup → Vercel → Roblox → Sandbox Fallback
+// Strategy: Sandbox accounts → VNGZZ2GAME Live API → mrxtopup → Vercel → Roblox → Sandbox Fallback
 // ─────────────────────────────────────────────────────────────────────────────
 async function lookupPlayerNickname(gameSlug, playerId, playerZoneId) {
     const trimmedId = playerId.trim();
@@ -350,11 +372,13 @@ async function lookupPlayerNickname(gameSlug, playerId, playerZoneId) {
     }
     const baseSlug = (gameSlug.startsWith('free-fire-') || gameSlug.includes('freefire'))
         ? 'free-fire'
-        : ((gameSlug.includes('mobile-legends') || gameSlug.includes('mlbb') || gameSlug.includes('moonton')) ? 'mobile-legends' : gameSlug);
+        : ((gameSlug.includes('mobile-legend') || gameSlug.includes('mlbb') || gameSlug.includes('moonton')) ? 'mobile-legends' : gameSlug);
     // Pre-check: If this ID is a pre-seeded mock sandbox account, resolve it immediately.
     if (baseSlug === 'mobile-legends') {
         const key = `${trimmedId}|${playerZoneId ? playerZoneId.trim() : ''}`;
-        const known = SANDBOX_ACCOUNTS['mobile-legends'][key];
+        const known = SANDBOX_ACCOUNTS['mobile-legends']?.[key] ||
+            SANDBOX_ACCOUNTS['mobile-legend']?.[key] ||
+            SANDBOX_ACCOUNTS['moonton-mlbb']?.[key];
         if (known)
             return { success: true, nickname: known };
     }
@@ -378,7 +402,14 @@ async function lookupPlayerNickname(gameSlug, playerId, playerZoneId) {
             }
             return liveResult;
         }
-        console.log(`[Game Provider API] mrxtopup API unavailable for ${gameSlug}. Using sandbox resolver.`);
+        // Secondary fallback for Mobile Legends: Vercel check-id-game gateway
+        if (baseSlug === 'mobile-legends') {
+            const vercelResult = await liveApiLookup('mobile_legends', trimmedId, playerZoneId);
+            if (vercelResult !== null && vercelResult.success) {
+                return vercelResult;
+            }
+        }
+        console.log(`[Game Provider API] Live APIs unavailable for ${gameSlug}. Using sandbox resolver.`);
         return sandboxLookup(gameSlug, trimmedId, playerZoneId);
     }
     // ── 2. Roblox: use official Roblox API ──────────────────────────────────
@@ -399,6 +430,9 @@ async function lookupPlayerNickname(gameSlug, playerId, playerZoneId) {
         'pubg-mobile': 'pubg_mobile',
         'honor-of-kings': 'honor_of_kings',
         'farlight-84': 'farlight',
+        'mobile-legends': 'mobile_legends',
+        'mobile-legend': 'mobile_legends',
+        'mlbb': 'mobile_legends',
     };
     const typeName = LIVE_API_SLUGS[gameSlug];
     if (typeName) {

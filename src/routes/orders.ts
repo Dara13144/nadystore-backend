@@ -8,6 +8,41 @@ import { verifyAbaKhqrPayment, processVerifiedPayment } from '../utils/paymentVe
 
 const router = Router();
 
+// Check Player ID & Zone ID (Public)
+router.post('/check-player', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const gameSlug = req.body?.gameSlug || req.body?.slug || '';
+    const playerId = (req.body?.playerId as string) || '';
+    const playerZoneId = (req.body?.playerZoneId as string) || (req.body?.zoneId as string) || '';
+
+    if (!playerId.trim()) {
+      return res.status(400).json({ success: false, error: 'Player ID is required' });
+    }
+
+    const result = await lookupPlayerNickname(gameSlug, playerId, playerZoneId);
+    if (result && result.success && result.nickname) {
+      return res.status(200).json({
+        success: true,
+        nickname: result.nickname,
+        region: result.region || 'Cambodia (Asia)',
+        level: result.level || 45,
+        avatarUrl: result.avatarUrl || '/images/games/mlbb.png',
+        playerId: playerId.trim(),
+        playerZoneId: playerZoneId.trim() || null,
+      });
+    }
+
+    return res.status(200).json({
+      success: false,
+      nickname: null,
+      error: result?.error || 'Player not found'
+    });
+  } catch (error: any) {
+    console.error('Check player error:', error);
+    return res.status(500).json({ success: false, error: 'Internal lookup error' });
+  }
+});
+
 // 1. Create a top-up order (Public / Authenticated)
 // Matches route POST /api/orders/
 router.post('/', async (req: AuthenticatedRequest, res: Response) => {
@@ -104,7 +139,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     // Validate Zone ID / Server ID if required by product
-    const isMLBBGame = pkg.product.slug.includes('mobile-legends') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');
+    const isMLBBGame = pkg.product.slug.includes('mobile-legend') || pkg.product.slug.includes('mlbb') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');
     const requiresZone = (pkg.product as any).hasZoneId || isMLBBGame;
     if (requiresZone && (!playerZoneId || !playerZoneId.trim())) {
       const fieldLabel = (pkg.product as any).zoneIdLabel || (isMLBBGame ? 'Zone ID' : 'Zone ID / Server ID');

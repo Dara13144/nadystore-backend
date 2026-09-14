@@ -36,17 +36,25 @@ router.get('/', async (req, res) => {
 });
 // 2. Lookup Player Nickname by Game and Player ID (Public)
 // IMPORTANT: This route MUST be before /:slug to avoid Express matching 'lookup' as a slug.
-router.get('/lookup/:gameSlug', async (req, res) => {
+const handlePlayerLookup = async (req, res) => {
     try {
-        const { gameSlug } = req.params;
-        const playerId = req.query.playerId || '';
-        const playerZoneId = req.query.playerZoneId || '';
+        const gameSlug = req.params.gameSlug || req.params.slug || req.body?.gameSlug || req.body?.slug || '';
+        const playerId = req.query.playerId || req.body?.playerId || '';
+        const playerZoneId = req.query.playerZoneId || req.body?.playerZoneId || req.body?.zoneId || '';
         if (!playerId.trim()) {
             return res.status(400).json({ success: false, error: 'Player ID is required' });
         }
         const result = await (0, gameProviderMock_1.lookupPlayerNickname)(gameSlug, playerId, playerZoneId);
         if (result && result.success && result.nickname) {
-            return res.status(200).json({ success: true, nickname: result.nickname });
+            return res.status(200).json({
+                success: true,
+                nickname: result.nickname,
+                region: result.region || 'Cambodia (Asia)',
+                level: result.level || 45,
+                avatarUrl: result.avatarUrl || '/images/games/mlbb.png',
+                playerId: playerId.trim(),
+                playerZoneId: playerZoneId.trim() || null,
+            });
         }
         return res.status(200).json({
             success: false,
@@ -58,7 +66,12 @@ router.get('/lookup/:gameSlug', async (req, res) => {
         console.error('Nickname lookup error:', error);
         return res.status(500).json({ success: false, error: 'Internal lookup error' });
     }
-});
+};
+router.get('/lookup/:gameSlug', handlePlayerLookup);
+router.post('/lookup/:gameSlug', handlePlayerLookup);
+router.get('/:slug/check-name', handlePlayerLookup);
+router.post('/:slug/check-name', handlePlayerLookup);
+router.post('/check-player', handlePlayerLookup);
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req, res) => {
     try {
