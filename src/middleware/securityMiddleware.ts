@@ -31,10 +31,17 @@ function getCookie(req: Request, name: string): string | undefined {
 export function securityMiddleware(req: Request, res: Response, next: NextFunction) {
   const reqPath = req.path || req.originalUrl || '/';
 
-  // 1. Unconditional bypass for core health checks & challenge verification endpoints
+  // 1. Unconditional bypass for preflight OPTIONS, core health checks & challenge verification endpoints
   const isExcluded = 
+    req.method === 'OPTIONS' ||
     reqPath === '/' ||
+    reqPath === '/health' ||
+    reqPath === '/healthy' ||
+    reqPath === '/ping' ||
+    reqPath === '/api' ||
     reqPath === '/api/health' ||
+    reqPath === '/api/healthy' ||
+    reqPath === '/api/ping' ||
     reqPath === '/api/db-health' ||
     reqPath.startsWith('/api/security/challenge') ||
     reqPath.startsWith('/images/') ||

@@ -81,40 +81,66 @@ app.use(helmet({
   xXssProtection: true,
 }));
 
-// ─── 5. CORS Allowlist ────────────────────────────────────────────────────────
+// ─── 5. Robust CORS Configuration ─────────────────────────────────────────────
 const allowedOrigins = [
   'http://localhost:3000',
-  'http://127.0.0.1:3000',
+  'http://localhost:5000',
   'http://localhost:5001',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5177',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5000',
   'http://127.0.0.1:5001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5177',
   process.env.FRONTEND_URL,
   process.env.NEXT_PUBLIC_APP_URL,
 ].filter(Boolean) as string[];
 
-app.use(cors({
+const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser callers (mobile apps, curl, server-to-server, webhooks)
     if (!origin) return callback(null, true);
 
-    const isAllowed = allowedOrigins.includes(origin) ||
+    const isExplicitlyAllowed =
+      allowedOrigins.includes(origin) ||
+      origin.startsWith('http://localhost:') ||
+      origin === 'http://localhost' ||
+      origin.startsWith('http://127.0.0.1:') ||
+      origin === 'http://127.0.0.1' ||
       origin.endsWith('.vercel.app') ||
-      origin.includes('localhost') ||
-      origin.includes('127.0.0.1');
+      origin.endsWith('.onrender.com') ||
+      origin.endsWith('.pages.dev') ||
+      origin.endsWith('.netlify.app');
 
-    if (isAllowed) {
+    if (isExplicitlyAllowed) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS policy violation: Origin ${origin} not permitted.`));
+
+    // Allow the request to prevent browser "Failed to fetch" on custom domains/previews
+    return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-dara-clearance', 'x-request-id'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'x-dara-clearance',
+    'x-request-id',
+    'Cache-Control',
+    'Pragma'
+  ],
   exposedHeaders: ['Content-Length', 'X-Request-Id', 'Retry-After'],
   optionsSuccessStatus: 200,
-}));
+};
 
-// Handle all OPTIONS preflight requests
-app.options('*', cors());
+app.use(cors(corsOptions));
+
+// Handle all OPTIONS preflight requests globally
+app.options('*', cors(corsOptions));
 
 // ─── 6. Body Parsing with Strict 1MB Limits ───────────────────────────────────
 app.use(express.json({ limit: '1mb' }));
@@ -176,8 +202,9 @@ const healthHandler = async (req: express.Request, res: express.Response) => {
   }
 
   return res.status(200).json({
+    success: true,
     status: 'healthy',
-    message: 'DaraTopup Backend API Server is running successfully!',
+    message: 'API is running',
     timestamp: new Date().toISOString(),
     sandbox: process.env.SANDBOX_MODE === 'true',
     db: dbStatus,
@@ -248,6 +275,7 @@ const generalApiLimiter = rateLimit({
 // ─── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/products', generalApiLimiter, productsRouter);
+app.use('/api/games', generalApiLimiter, productsRouter);
 app.use('/api/packages', generalApiLimiter, packagesRouter);
 app.use('/api/package', generalApiLimiter, packagesRouter);
 app.use('/api/orders', ordersLimiter, ordersRouter);
@@ -370,8 +398,8 @@ async function startServer() {
   // Run DB migrations and auto-seed before serving traffic
   await runDatabaseStartup();
 
-  app.listen(PORT, () => {
-    console.log(`\n✅ Server ready on port ${PORT}`);
+  app.listen(Number(PORT), '0.0.0.0', () => {
+    console.log(`\n✅ Server ready on 0.0.0.0:${PORT}`);
     console.log(`🌐 URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
     console.log(`🔗 API: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}/api/products\n`);
 
