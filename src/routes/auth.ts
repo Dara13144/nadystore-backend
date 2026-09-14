@@ -7,10 +7,11 @@ import { authenticateJWT, AuthenticatedRequest } from '../middleware/auth';
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
 
-const ADMIN_EMAILS = [
+export const ADMIN_EMAILS = [
   'mdara9695@gmail.com',
   'admin@nadytopup.com',
-  'admin@topup.com'
+  'admin@topup.com',
+  'admin@gmail.com'
 ];
 
 // Register Route
@@ -132,6 +133,13 @@ router.post('/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '7d' }
     );
+
+    res.cookie('token', token, {
+      httpOnly: false,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
 
     return res.status(200).json({
       message: 'Login successful',
@@ -277,6 +285,13 @@ router.post('/google', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    res.cookie('token', token, {
+      httpOnly: false,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
     return res.status(200).json({
       message: 'Google login successful',
       token,
@@ -288,7 +303,7 @@ router.post('/google', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Google login route error:', error);
-    return res.status(500).json({ error: error.message || 'Internal server error during Google login' });
+    return res.status(500).json({ error: 'Internal server error during Google login' });
   }
 });
 

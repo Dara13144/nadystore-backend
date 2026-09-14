@@ -98,3 +98,19 @@ model AuditLog {
   createdAt   DateTime @default(now())
 }
 
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  telegram  String?
+  subject   String
+  message   String
+  txnId     String?
+  status    String   @default("PENDING") // PENDING, IN_PROGRESS, RESOLVED
+  reply     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+

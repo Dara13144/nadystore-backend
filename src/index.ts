@@ -24,39 +24,103 @@ import adminRouter from './routes/admin';
 import paymentsRouter from './routes/payments';
 import webhookRouter from './routes/webhook';
 import securityRouter from './routes/security';
+import contactRouter from './routes/contact';
 import securityMiddleware from './middleware/securityMiddleware';
 import { verifyAbaKhqrPayment, processVerifiedPayment, expireOldOrders } from './utils/paymentVerification';
 import { runDatabaseStartup } from './utils/startup';
 
+import crypto from 'crypto';
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ─── Security Middleware ───────────────────────────────────────────────────────
+// Disable server framework banner
+app.disable('x-powered-by');
+
+// ─── 1. Request ID Middleware ──────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const incoming = req.headers['x-request-id'];
+  const requestId = (typeof incoming === 'string' && incoming.trim()) ? incoming.trim() : crypto.randomUUID();
+  (req as any).id = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  next();
+});
+
+// ─── 2. HTTP Method Protection ────────────────────────────────────────────────
+const ALLOWED_HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
+app.use((req, res, next) => {
+  if (!ALLOWED_HTTP_METHODS.includes(req.method)) {
+    return res.status(405).json({
+      success: false,
+      message: `Method ${req.method} not allowed`,
+    });
+  }
+  next();
+});
+
+// ─── 3. Sanitized Request Logging (Metadata Only, Never Bodies or Tokens) ─────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const reqPath = req.originalUrl || req.url;
+    if (!reqPath.startsWith('/uploads')) {
+      console.log(`[HTTP] [${(req as any).id}] ${req.method} ${reqPath} ${res.statusCode} (${duration}ms)`);
+    }
+  });
+  next();
+});
+
+// ─── 4. Security Middleware (Helmet) ──────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: false,
+  xContentTypeOptions: true,
+  xFrameOptions: { action: 'sameorigin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  xXssProtection: true,
 }));
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// ─── 5. CORS Allowlist ────────────────────────────────────────────────────────
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5001',
+  'http://127.0.0.1:5001',
+  process.env.FRONTEND_URL,
+  process.env.NEXT_PUBLIC_APP_URL,
+].filter(Boolean) as string[];
+
 app.use(cors({
   origin: (origin, callback) => {
-    callback(null, true); // Allow all origins — works for Vercel, Render, and local dev
+    // Allow non-browser callers (mobile apps, curl, server-to-server, webhooks)
+    if (!origin) return callback(null, true);
+
+    const isAllowed = allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app') ||
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1');
+
+    if (isAllowed) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS policy violation: Origin ${origin} not permitted.`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders: ['Content-Length', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-dara-clearance', 'x-request-id'],
+  exposedHeaders: ['Content-Length', 'X-Request-Id', 'Retry-After'],
   optionsSuccessStatus: 200,
 }));
 
 // Handle all OPTIONS preflight requests
 app.options('*', cors());
 
-// ─── Body Parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// ─── 6. Body Parsing with Strict 1MB Limits ───────────────────────────────────
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// ─── Professional Anti-DDoS & WAF Protection System ───────────────────────────
+// ─── 7. Professional Anti-DDoS & WAF Protection System ────────────────────────
 app.use(securityMiddleware);
 
 // ─── Static Files ─────────────────────────────────────────────────────────────
@@ -107,7 +171,8 @@ const healthHandler = async (req: express.Request, res: express.Response) => {
     // Quick DB ping to verify connectivity
     await prisma.$queryRaw`SELECT 1`;
   } catch (err: any) {
-    dbStatus = 'error: ' + err.message;
+    console.error('[Health] DB ping error:', err.message);
+    dbStatus = 'disconnected';
   }
 
   return res.status(200).json({
@@ -116,7 +181,6 @@ const healthHandler = async (req: express.Request, res: express.Response) => {
     timestamp: new Date().toISOString(),
     sandbox: process.env.SANDBOX_MODE === 'true',
     db: dbStatus,
-    ...apiDirectory,
   });
 };
 
@@ -131,24 +195,69 @@ app.get('/api/db-health', async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    console.error('[Health] DB health check failure:', err.message);
     res.status(500).json({
       database: 'disconnected',
       status: 'unhealthy',
-      error: err.message,
+      error: 'Database connection check failed',
     });
   }
 });
 
+// ─── Production Rate Limiters ──────────────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // max 20 login/register attempts per 15 mins per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts from this IP. Please try again after 15 minutes.' },
+});
+
+const ordersLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50, // max 50 orders per 15 mins per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Order creation rate limit exceeded. Please wait a few minutes before trying again.' },
+});
+
+const paymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60, // max 60 payment checks per 15 mins per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Payment verification rate limit exceeded. Please wait a moment.' },
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 250, // max 250 admin requests per 15 mins
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Admin API rate limit exceeded.' },
+});
+
+const generalApiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600, // max 600 catalog queries per 15 mins
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'API request rate limit exceeded. Please slow down.' },
+});
+
 // ─── API Routes ────────────────────────────────────────────────────────────────
-app.use('/api/auth', authRouter);
-app.use('/api/products', productsRouter);
-app.use('/api/packages', packagesRouter);
-app.use('/api/package', packagesRouter);
-app.use('/api/orders', ordersRouter);
-app.use('/api/admin', adminRouter);
+app.use('/api/auth', authLimiter, authRouter);
+app.use('/api/products', generalApiLimiter, productsRouter);
+app.use('/api/packages', generalApiLimiter, packagesRouter);
+app.use('/api/package', generalApiLimiter, packagesRouter);
+app.use('/api/orders', ordersLimiter, ordersRouter);
+app.use('/api/admin', adminLimiter, adminRouter);
+app.use('/api/contact', generalApiLimiter, contactRouter);
 app.use('/api/security', securityRouter);
-app.use('/api/payments', paymentsRouter);
-app.use('/api/payment', paymentsRouter);
+app.use('/api/payments', paymentLimiter, paymentsRouter);
+app.use('/api/payment', paymentLimiter, paymentsRouter);
+
+// Payment webhooks bypass rate limits so provider callbacks are never dropped
 app.use('/api/webhook', webhookRouter);
 app.use('/api/payments/webhook', webhookRouter);
 app.use('/api/payment/webhook', webhookRouter);
@@ -179,30 +288,30 @@ app.post(
   }
 );
 
-// ─── 404 Catch-all ────────────────────────────────────────────────────────────
+// ─── 404 Catch-all (Safe, Non-Enumerating) ───────────────────────────────────
 app.use((req, res) => {
-  res.status(404).json({
-    error: `Route not found: ${req.method} ${req.path}`,
-    availableRoutes: [
-      'GET /',
-      'GET /api/health',
-      'GET /api/products',
-      'GET /api/products/:slug',
-      'POST /api/auth/login',
-      'POST /api/auth/register',
-      'POST /api/orders',
-      'GET /api/orders/status/:txnId',
-    ],
+  return res.status(404).json({
+    success: false,
+    message: 'Resource not found',
   });
 });
 
-// ─── Global Error Handler ─────────────────────────────────────────────────────
+// ─── Global Error Handler (Sanitized, Request ID Correlated) ──────────────────
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('[Error]', err.constructor?.name, '-', err.message);
-  if (err.stack) console.error(err.stack.split('\n').slice(0, 5).join('\n'));
-  res.status(500).json({
-    error: 'Internal Server Error',
-    ...(process.env.NODE_ENV !== 'production' && { details: err.message }),
+  const requestId = (req as any).id || (req.headers['x-request-id'] as string) || 'N/A';
+  console.error(`[Error] [${requestId}] ${err.constructor?.name || 'Server Error'}:`, err.message || err);
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  const status = typeof err.status === 'number' ? err.status : (typeof err.statusCode === 'number' ? err.statusCode : 500);
+  const isClientError = status >= 400 && status < 500;
+
+  return res.status(status).json({
+    success: false,
+    message: isClientError ? (err.message || 'Bad request') : 'Internal server error',
+    reference: requestId,
   });
 });
 
@@ -218,7 +327,14 @@ async function runPaymentSweep() {
 
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const pendingOrders = await prisma.order.findMany({
-      where: { paymentStatus: 'PENDING', createdAt: { gte: cutoff } },
+      where: {
+        OR: [
+          { status: 'PENDING' },
+          { paymentStatus: 'PENDING' },
+          { paymentStatus: 'UNPAID' },
+        ],
+        createdAt: { gte: cutoff },
+      },
       include: { package: { include: { product: true } } },
     });
 

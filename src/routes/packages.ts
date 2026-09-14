@@ -106,36 +106,89 @@ router.patch('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedReq
       });
       console.log(`[Packages API] Updated package: ${resultPackage.name} ($${resultPackage.price})`);
     } else {
-      let targetProductId = productId;
-      if (!targetProductId) {
-        // Try to match product by slug in ID
-        const matchedProduct = await prisma.product.findFirst();
-        if (!matchedProduct) {
-          return res.status(404).json({ error: 'Product not found to attach package' });
-        }
-        targetProductId = matchedProduct.id;
+      // Robust Product Resolution to guarantee Foreign Key validity
+      let targetProduct = null;
+      if (productId) {
+        targetProduct = await prisma.product.findFirst({
+          where: {
+            OR: [
+              { id: productId },
+              { slug: productId },
+              { name: { equals: productId, mode: 'insensitive' } },
+            ],
+          },
+        });
       }
 
-      resultPackage = await prisma.package.create({
-        data: {
-          productId: targetProductId,
-          name: name || 'New Package',
-          amount: amount !== undefined ? parseInt(amount, 10) : 100,
-          price: price !== undefined ? parseFloat(price) : 0.99,
-          category: category || 'NORMAL',
-          badge: badge || null,
-          image: image || null,
-          isActive: isActive !== undefined ? isActive : true,
+      if (!targetProduct && id) {
+        const parts = id.split('-');
+        const possibleProductSlug = parts.length > 1 ? parts.slice(0, -1).join('-') : id;
+        targetProduct = await prisma.product.findFirst({
+          where: {
+            OR: [
+              { id },
+              { slug: id },
+              { slug: possibleProductSlug },
+            ],
+          },
+        });
+      }
+
+      if (!targetProduct) {
+        targetProduct = await prisma.product.findFirst();
+      }
+
+      if (!targetProduct) {
+        targetProduct = await prisma.product.create({
+          data: {
+            name: 'General Games',
+            slug: 'general-games',
+            image: '/images/games/freefire.png',
+            category: 'MOBILE_GAME',
+            isActive: true,
+          },
+        });
+      }
+
+      // Check if this product already has a matching package to update instead
+      const duplicatePkg = await prisma.package.findFirst({
+        where: {
+          productId: targetProduct.id,
+          OR: [
+            name ? { name: { equals: name, mode: 'insensitive' } } : {},
+            amount !== undefined ? { amount: parseInt(amount, 10) } : {},
+          ],
         },
       });
-      console.log(`[Packages API] Upserted package: ${resultPackage.name} ($${resultPackage.price})`);
+
+      if (duplicatePkg) {
+        resultPackage = await prisma.package.update({
+          where: { id: duplicatePkg.id },
+          data,
+        });
+        console.log(`[Packages API] Updated existing package: ${resultPackage.name} ($${resultPackage.price})`);
+      } else {
+        resultPackage = await prisma.package.create({
+          data: {
+            productId: targetProduct.id,
+            name: name || 'New Package',
+            amount: amount !== undefined ? parseInt(amount, 10) : 100,
+            price: price !== undefined ? parseFloat(price) : 0.99,
+            category: category || 'NORMAL',
+            badge: badge || null,
+            image: image || null,
+            isActive: isActive !== undefined ? isActive : true,
+          },
+        });
+        console.log(`[Packages API] Upserted package under ${targetProduct.name}: ${resultPackage.name} ($${resultPackage.price})`);
+      }
     }
 
     broadcastRealtimeEvent('products-catalog-realtime', 'PACKAGE_UPDATED', { package: resultPackage });
     return res.status(200).json({ message: 'Package updated successfully', package: resultPackage });
   } catch (error: any) {
     console.error('Update package error:', error);
-    return res.status(500).json({ error: 'Failed to update package: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to update package' });
   }
 });
 
@@ -174,7 +227,7 @@ router.delete('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRe
     return res.status(200).json({ message: 'Package deleted successfully', id: pkg.id });
   } catch (error: any) {
     console.error('Delete package error:', error);
-    return res.status(500).json({ error: 'Failed to delete package: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to delete package' });
   }
 });
 

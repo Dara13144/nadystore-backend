@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS "Package" (
     "badge" TEXT,
     "createdAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     "updatedAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT "fk_package_product" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "Package_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- 5. Order Table (Transactions, Player IDs, KHQR & Status)
@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS "Order" (
     "stockDeliveredCode" TEXT,
     "createdAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     "updatedAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT "fk_order_user" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "fk_order_package" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "Order_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT "Order_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- 6. Digital Voucher Stock Table
@@ -80,10 +80,23 @@ CREATE TABLE IF NOT EXISTS "Stock" (
     "orderId" TEXT,
     "createdAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     "updatedAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    CONSTRAINT "fk_stock_package" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "Stock_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- 7. System Settings Table
+-- 7. Contact Message Table (Live Inquiries & Support)
+CREATE TABLE IF NOT EXISTS "ContactMessage" (
+    "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    "name" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "phone" TEXT,
+    "topic" TEXT DEFAULT 'General',
+    "message" TEXT NOT NULL,
+    "status" TEXT DEFAULT 'PENDING' NOT NULL,
+    "createdAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+-- 8. System Settings Table
 CREATE TABLE IF NOT EXISTS "SystemSetting" (
     "key" TEXT PRIMARY KEY,
     "value" TEXT NOT NULL,
@@ -91,7 +104,7 @@ CREATE TABLE IF NOT EXISTS "SystemSetting" (
     "updatedAt" TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
--- 8. Audit Log Table
+-- 9. Audit Log Table
 CREATE TABLE IF NOT EXISTS "AuditLog" (
     "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     "action" TEXT NOT NULL,
@@ -101,7 +114,7 @@ CREATE TABLE IF NOT EXISTS "AuditLog" (
 );
 
 -- ==============================================================================
--- 9. PERFORMANCE INDEXES
+-- 10. PERFORMANCE INDEXES
 -- ==============================================================================
 CREATE INDEX IF NOT EXISTS "idx_user_email" ON "User"("email");
 CREATE INDEX IF NOT EXISTS "idx_product_slug" ON "Product"("slug");
@@ -111,32 +124,92 @@ CREATE INDEX IF NOT EXISTS "idx_order_paymenttxnid" ON "Order"("paymentTxnId");
 CREATE INDEX IF NOT EXISTS "idx_order_status" ON "Order"("status");
 CREATE INDEX IF NOT EXISTS "idx_order_paymentstatus" ON "Order"("paymentStatus");
 CREATE INDEX IF NOT EXISTS "idx_order_userid" ON "Order"("userId");
+CREATE INDEX IF NOT EXISTS "idx_contact_status" ON "ContactMessage"("status");
+CREATE INDEX IF NOT EXISTS "idx_contact_created" ON "ContactMessage"("createdAt" DESC);
 
 -- ==============================================================================
--- 10. SUPABASE REALTIME REPLICATION (Instant Order & Game Updates)
+-- 11. SUPABASE REALTIME REPLICATION (Instant Order, Catalog & Support Sync)
 -- ==============================================================================
 ALTER TABLE "Order" REPLICA IDENTITY FULL;
 ALTER TABLE "Product" REPLICA IDENTITY FULL;
 ALTER TABLE "Package" REPLICA IDENTITY FULL;
+ALTER TABLE "Stock" REPLICA IDENTITY FULL;
+ALTER TABLE "ContactMessage" REPLICA IDENTITY FULL;
+ALTER TABLE "User" REPLICA IDENTITY FULL;
 ALTER TABLE "SystemSetting" REPLICA IDENTITY FULL;
 
 DO $$ 
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE "Order", "Product", "Package", "SystemSetting";
+        ALTER PUBLICATION supabase_realtime ADD TABLE "Order", "Product", "Package", "Stock", "ContactMessage", "User", "SystemSetting";
     END IF;
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
 -- ==============================================================================
--- 11. SUPABASE STORAGE BUCKETS (Games Artwork, Package Icons & Uploads)
+-- 12. ROW LEVEL SECURITY (RLS) POLICIES & GRANTS
+-- ==============================================================================
+ALTER TABLE "Product" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "Package" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "Order" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ContactMessage" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "Stock" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "User" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SystemSetting" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "AuditLog" ENABLE ROW LEVEL SECURITY;
+
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, service_role;
+
+GRANT SELECT ON "Product", "Package", "SystemSetting" TO anon, authenticated;
+GRANT SELECT, INSERT ON "Order" TO anon, authenticated;
+GRANT SELECT, INSERT ON "ContactMessage" TO anon, authenticated;
+
+-- RLS Policies
+DROP POLICY IF EXISTS "Public can view active products" ON "Product";
+CREATE POLICY "Public can view active products" ON "Product" FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow delete on Product" ON "Product";
+CREATE POLICY "Allow delete on Product" ON "Product" FOR DELETE TO anon, authenticated, service_role USING (true);
+
+DROP POLICY IF EXISTS "Public can view active packages" ON "Package";
+CREATE POLICY "Public can view active packages" ON "Package" FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow delete on Package" ON "Package";
+CREATE POLICY "Allow delete on Package" ON "Package" FOR DELETE TO anon, authenticated, service_role USING (true);
+
+CREATE OR REPLACE VIEW "games" AS 
+SELECT id, name, slug, image, category, "isActive", "createdAt", "updatedAt" 
+FROM "Product";
+
+CREATE OR REPLACE RULE games_delete AS ON DELETE TO "games" DO INSTEAD (
+  DELETE FROM "Product" WHERE id = OLD.id
+);
+GRANT ALL ON "games" TO anon, authenticated, service_role;
+
+DROP POLICY IF EXISTS "Public can create orders" ON "Order";
+CREATE POLICY "Public can create orders" ON "Order" FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can view orders" ON "Order";
+CREATE POLICY "Public can view orders" ON "Order" FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Public can submit contact messages" ON "ContactMessage";
+CREATE POLICY "Public can submit contact messages" ON "ContactMessage" FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can view contact messages" ON "ContactMessage";
+CREATE POLICY "Public can view contact messages" ON "ContactMessage" FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Public can view system settings" ON "SystemSetting";
+CREATE POLICY "Public can view system settings" ON "SystemSetting" FOR SELECT TO anon, authenticated USING (true);
+
+-- ==============================================================================
+-- 13. SUPABASE STORAGE BUCKETS (Games Artwork, Package Icons & Uploads)
 -- ==============================================================================
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('games', 'games', true), ('packages', 'packages', true), ('uploads', 'uploads', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
 
--- Storage Access Policies
 DO $$ 
 BEGIN
     CREATE POLICY "Public Read All Buckets" ON storage.objects 
@@ -154,7 +227,7 @@ EXCEPTION
 END $$;
 
 -- ==============================================================================
--- 12. SEED ADMIN ACCOUNTS (Password: admin123)
+-- 14. SEED ADMIN ACCOUNTS (Password: admin123)
 -- ==============================================================================
 INSERT INTO "User" ("id", "email", "password", "role", "createdAt", "updatedAt")
 VALUES
@@ -164,58 +237,7 @@ ON CONFLICT ("email") DO UPDATE
 SET "role" = 'ADMIN', "password" = EXCLUDED."password", "updatedAt" = NOW();
 
 -- ==============================================================================
--- 13. SEED CORE PRODUCTS & PACKAGES
--- ==============================================================================
--- Product 1: Free Fire
-INSERT INTO "Product" ("id", "name", "slug", "image", "category", "isActive", "createdAt", "updatedAt")
-VALUES ('ff-prod-01', 'Free Fire', 'free-fire', '/images/games/freefire.png', 'MOBILE_GAME', true, NOW(), NOW())
-ON CONFLICT ("slug") DO UPDATE SET "name" = EXCLUDED."name", "image" = EXCLUDED."image", "isActive" = true;
-
--- Product 2: Mobile Legends: Bang Bang
-INSERT INTO "Product" ("id", "name", "slug", "image", "category", "isActive", "createdAt", "updatedAt")
-VALUES ('ml-prod-02', 'Mobile Legends: Bang Bang', 'mobile-legends', '/images/games/mlbb.png', 'MOBILE_GAME', true, NOW(), NOW())
-ON CONFLICT ("slug") DO UPDATE SET "name" = EXCLUDED."name", "image" = EXCLUDED."image", "isActive" = true;
-
--- Product 3: Moonton Mobile Legends
-INSERT INTO "Product" ("id", "name", "slug", "image", "category", "isActive", "createdAt", "updatedAt")
-VALUES ('moonton-prod-03', 'Moonton Mobile Legends', 'moonton-mlbb', '/images/games/moonton-mlbb.png', 'MOBILE_GAME', true, NOW(), NOW())
-ON CONFLICT ("slug") DO UPDATE SET "name" = EXCLUDED."name", "image" = EXCLUDED."image", "isActive" = true;
-
--- Seed Packages for Free Fire
-INSERT INTO "Package" ("id", "productId", "name", "amount", "price", "category", "badge", "isActive", "createdAt", "updatedAt")
-VALUES
-    ('ff-pkg-1', 'ff-prod-01', '50 Diamonds', 50, 0.49, 'NORMAL', NULL, true, NOW(), NOW()),
-    ('ff-pkg-2', 'ff-prod-01', '100+15 Diamonds', 115, 0.99, 'NORMAL', 'Popular', true, NOW(), NOW()),
-    ('ff-pkg-3', 'ff-prod-01', '310+40 Diamonds', 350, 2.99, 'NORMAL', 'Hot', true, NOW(), NOW()),
-    ('ff-pkg-4', 'ff-prod-01', '520+65 Diamonds', 585, 4.99, 'BEST_SELLER', '🔥 Best Value', true, NOW(), NOW()),
-    ('ff-pkg-5', 'ff-prod-01', '1060+160 Diamonds', 1220, 9.99, 'BEST_SELLER', 'VIP Choice', true, NOW(), NOW()),
-    ('ff-pkg-6', 'ff-prod-01', '2180+350 Diamonds', 2530, 19.99, 'BEST_SELLER', 'Mega Saver', true, NOW(), NOW())
-ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "price" = EXCLUDED."price", "amount" = EXCLUDED."amount", "isActive" = true;
-
--- Seed Packages for Mobile Legends
-INSERT INTO "Package" ("id", "productId", "name", "amount", "price", "category", "badge", "isActive", "createdAt", "updatedAt")
-VALUES
-    ('ml-pkg-1', 'ml-prod-02', '50+5 Diamonds', 55, 0.99, 'NORMAL', NULL, true, NOW(), NOW()),
-    ('ml-pkg-2', 'ml-prod-02', '100+10 Diamonds', 110, 1.99, 'NORMAL', 'Popular', true, NOW(), NOW()),
-    ('ml-pkg-3', 'ml-prod-02', '250+25 Diamonds', 275, 4.99, 'NORMAL', 'Hot', true, NOW(), NOW()),
-    ('ml-pkg-4', 'ml-prod-02', '500+65 Diamonds', 565, 9.99, 'BEST_SELLER', '🔥 Best Value', true, NOW(), NOW()),
-    ('ml-pkg-5', 'ml-prod-02', '1000+150 Diamonds', 1150, 19.99, 'BEST_SELLER', 'VIP Choice', true, NOW(), NOW()),
-    ('ml-pkg-6', 'ml-prod-02', 'Weekly Diamond Pass', 1, 1.85, 'BEST_SELLER', '👑 Best Seller', true, NOW(), NOW())
-ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "price" = EXCLUDED."price", "amount" = EXCLUDED."amount", "isActive" = true;
-
--- Seed Packages for Moonton Mobile Legends
-INSERT INTO "Package" ("id", "productId", "name", "amount", "price", "category", "badge", "isActive", "createdAt", "updatedAt")
-VALUES
-    ('moonton-pkg-1', 'moonton-prod-03', '50+5 Diamonds', 55, 0.99, 'NORMAL', NULL, true, NOW(), NOW()),
-    ('moonton-pkg-2', 'moonton-prod-03', '100+10 Diamonds', 110, 1.99, 'NORMAL', 'Popular', true, NOW(), NOW()),
-    ('moonton-pkg-3', 'moonton-prod-03', '250+25 Diamonds', 275, 4.99, 'NORMAL', 'Hot', true, NOW(), NOW()),
-    ('moonton-pkg-4', 'moonton-prod-03', '500+65 Diamonds', 565, 9.99, 'BEST_SELLER', '🔥 Best Value', true, NOW(), NOW()),
-    ('moonton-pkg-5', 'moonton-prod-03', '1000+150 Diamonds', 1150, 19.99, 'BEST_SELLER', 'VIP Choice', true, NOW(), NOW()),
-    ('moonton-pkg-6', 'moonton-prod-03', 'Weekly Diamond Pass', 1, 1.85, 'BEST_SELLER', '👑 Best Seller', true, NOW(), NOW())
-ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "price" = EXCLUDED."price", "amount" = EXCLUDED."amount", "isActive" = true;
-
--- ==============================================================================
--- 14. INITIAL SYSTEM SETTINGS SEED DATA
+-- 15. SEED INITIAL SYSTEM SETTINGS
 -- ==============================================================================
 INSERT INTO "SystemSetting" ("key", "value", "description") VALUES
 ('SITE_NAME', 'NA-DY TOPUP', 'Website brand name'),
@@ -223,4 +245,3 @@ INSERT INTO "SystemSetting" ("key", "value", "description") VALUES
 ('BANNER_ANNOUNCEMENT', '🎉 Instant Auto-Topup 24/7 with KHQR & Bakong!', 'Top banner marquee message'),
 ('MAINTENANCE_MODE', 'false', 'Global maintenance mode switch')
 ON CONFLICT ("key") DO NOTHING;
-

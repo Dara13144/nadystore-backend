@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.ADMIN_EMAILS = void 0;
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -10,10 +11,11 @@ const prisma_1 = __importDefault(require("../prisma"));
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
-const ADMIN_EMAILS = [
+exports.ADMIN_EMAILS = [
     'mdara9695@gmail.com',
     'admin@nadytopup.com',
-    'admin@topup.com'
+    'admin@topup.com',
+    'admin@gmail.com'
 ];
 // Register Route
 router.post('/register', async (req, res) => {
@@ -34,7 +36,7 @@ router.post('/register', async (req, res) => {
         const hashedPassword = await bcryptjs_1.default.hash(password, 10);
         // If matches admin list or is first user, make ADMIN
         const userCount = await prisma_1.default.user.count();
-        const isAdminEmail = ADMIN_EMAILS.includes(email);
+        const isAdminEmail = exports.ADMIN_EMAILS.includes(email);
         const role = (isAdminEmail || userCount === 0) ? 'ADMIN' : 'USER';
         const user = await prisma_1.default.user.create({
             data: {
@@ -71,7 +73,7 @@ router.post('/login', async (req, res) => {
         let user = await prisma_1.default.user.findUnique({
             where: { email },
         });
-        const isAdminEmail = ADMIN_EMAILS.includes(email);
+        const isAdminEmail = exports.ADMIN_EMAILS.includes(email);
         if (!user) {
             if (isAdminEmail && (password === 'admin123' || password === 'admin' || password === '123456')) {
                 const hashedPassword = await bcryptjs_1.default.hash(password, 10);
@@ -113,6 +115,12 @@ router.post('/login', async (req, res) => {
         }
         // Generate JWT token
         const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.cookie('token', token, {
+            httpOnly: false,
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/',
+        });
         return res.status(200).json({
             message: 'Login successful',
             token,
@@ -147,7 +155,7 @@ router.get('/me', auth_1.authenticateJWT, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         // Elevate admin if matches email
-        if (ADMIN_EMAILS.includes(user.email.toLowerCase()) && user.role !== 'ADMIN') {
+        if (exports.ADMIN_EMAILS.includes(user.email.toLowerCase()) && user.role !== 'ADMIN') {
             user = await prisma_1.default.user.update({
                 where: { id: user.id },
                 data: { role: 'ADMIN' },
@@ -221,7 +229,7 @@ router.post('/google', async (req, res) => {
         if (!email) {
             return res.status(400).json({ error: 'Failed to retrieve email from Google credential' });
         }
-        const isAdminEmail = ADMIN_EMAILS.includes(email);
+        const isAdminEmail = exports.ADMIN_EMAILS.includes(email);
         let user = await prisma_1.default.user.findUnique({ where: { email } });
         if (!user) {
             const generatedPass = await bcryptjs_1.default.hash(`google_${Date.now()}_${Math.random()}`, 10);
@@ -242,6 +250,12 @@ router.post('/google', async (req, res) => {
             console.log(`[Auth] Elevated Google account to ADMIN: ${email}`);
         }
         const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.cookie('token', token, {
+            httpOnly: false,
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/',
+        });
         return res.status(200).json({
             message: 'Google login successful',
             token,
@@ -254,7 +268,7 @@ router.post('/google', async (req, res) => {
     }
     catch (error) {
         console.error('Google login route error:', error);
-        return res.status(500).json({ error: error.message || 'Internal server error during Google login' });
+        return res.status(500).json({ error: 'Internal server error during Google login' });
     }
 });
 exports.default = router;

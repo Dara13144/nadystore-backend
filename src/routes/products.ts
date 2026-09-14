@@ -9,6 +9,9 @@ const router = Router();
 // 1. Get all products with active packages (Public)
 router.get('/', async (req: Request, res: Response) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     const products = await prisma.product.findMany({
       where: { isActive: true },
       include: {
@@ -23,8 +26,7 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("DATABASE ERROR:", error);
     return res.status(500).json({
-      error: "Database error",
-      details: error.message || String(error),
+      error: "Internal database error",
     });
   }
 });
@@ -61,6 +63,9 @@ router.get('/lookup/:gameSlug', async (req: Request, res: Response) => {
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req: Request, res: Response) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     const rawSlug = decodeURIComponent(req.params.slug).trim();
     const slug = rawSlug.toLowerCase();
 
@@ -178,7 +183,7 @@ router.post('/', authenticateJWT, requireAdmin, async (req: AuthenticatedRequest
     return res.status(201).json(fullProduct);
   } catch (error: any) {
     console.error('Error creating product:', error);
-    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to create product' });
   }
 });
 
@@ -237,15 +242,27 @@ router.delete('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRe
       where: { id: product.id },
     });
 
+    // 5. Verification: verify record is truly gone from database
+    const remainingGame = await prisma.product.findUnique({
+      where: { id: product.id },
+      select: { id: true },
+    });
+    if (remainingGame) {
+      return res.status(500).json({
+        success: false,
+        error: 'Product still exists in database after delete operation',
+      });
+    }
+
     broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_DELETED', {
       id: product.id,
       slug: product.slug,
     });
 
-    return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
+    return res.status(200).json({ success: true, message: 'Product deleted successfully', id: product.id });
   } catch (error: any) {
     console.error('Error deleting product:', error);
-    return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to delete product' });
   }
 });
 

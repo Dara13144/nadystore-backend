@@ -75,25 +75,12 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
             where: { id: pkg.id },
             include: { product: true },
           }).catch(() => null);
-        } else {
-          // If no package exists yet, create on the fly
-          const newPkg = await prisma.package.create({
-            data: {
-              productId: prod.id,
-              name: packageName || `${amount || 60} Diamonds`,
-              amount: parseInt(amount || 60, 10),
-              price: parseFloat(price || 0.99),
-              category: 'NORMAL',
-            },
-            include: { product: true },
-          }).catch(() => null);
-          pkg = newPkg;
         }
       }
     }
 
-    if (!pkg) {
-      return res.status(404).json({ error: 'Package not found' });
+    if (!pkg || !pkg.isActive) {
+      return res.status(404).json({ error: 'Package not found or currently inactive' });
     }
 
     // Validate Player ID and retrieve nickname (non-blocking)

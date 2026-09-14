@@ -53,7 +53,70 @@ const upload = multer({
 // Apply auth + admin restriction to all paths in this router
 router.use(authenticateJWT, requireAdmin);
 
-// 0. Image Upload Endpoint
+// 0.1 Admin authoritative Products list (No-store, live from Supabase PostgreSQL)
+router.get('/products', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    const products = await prisma.product.findMany({
+      include: {
+        packages: {
+          orderBy: { price: 'asc' },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return res.status(200).json(products);
+  } catch (error: any) {
+    console.error('Error fetching admin products:', error);
+    return res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// 0.2 Admin authoritative Product delete (Cascades child records, verifies deletion, broadcasts Realtime)
+router.delete('/products/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const product = await prisma.product.findFirst({
+      where: { OR: [{ id }, { slug: id }] },
+      include: { packages: true },
+    });
+
+    if (!product) {
+      return res.status(404).json({ success: false, error: 'Product not found' });
+    }
+
+    const packageIds = product.packages.map((p) => p.id);
+    if (packageIds.length > 0) {
+      await prisma.stock.deleteMany({ where: { packageId: { in: packageIds } } });
+      await prisma.order.deleteMany({ where: { packageId: { in: packageIds } } });
+      await prisma.package.deleteMany({ where: { productId: product.id } });
+    }
+
+    await prisma.product.delete({ where: { id: product.id } });
+
+    const remainingGame = await prisma.product.findUnique({
+      where: { id: product.id },
+      select: { id: true },
+    });
+    if (remainingGame) {
+      return res.status(500).json({ success: false, error: 'Game still exists in database after delete' });
+    }
+
+    broadcastRealtimeEvent('products-catalog-realtime', 'PRODUCT_DELETED', {
+      id: product.id,
+      slug: product.slug,
+    });
+
+    return res.status(200).json({ success: true, message: 'Game deleted successfully', id: product.id });
+  } catch (error: any) {
+    console.error('Error deleting product in admin router:', error);
+    return res.status(500).json({ success: false, error: 'Failed to delete product' });
+  }
+});
+
+// 0.3 Image Upload Endpoint (Supports File and Base64 Uploads)
 router.post('/upload-image', (req: any, res: any) => {
   upload.single('image')(req, res, (err: any) => {
     if (err) {
@@ -66,6 +129,7 @@ router.post('/upload-image', (req: any, res: any) => {
       console.log(`[Admin Dashboard] Uploaded new image file: ${publicUrl}`);
       return res.status(200).json({
         message: 'Image uploaded successfully',
+        imageUrl: publicUrl,
         url: publicUrl,
         filename: req.file.filename,
       });
@@ -83,6 +147,7 @@ router.post('/upload-image', (req: any, res: any) => {
           const publicUrl = `/uploads/${filename}`;
           return res.status(200).json({
             message: 'Image uploaded successfully',
+            imageUrl: publicUrl,
             url: publicUrl,
             filename,
           });
@@ -252,6 +317,87 @@ router.put('/orders/:id', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// 3.1. Auto-verify all pending orders against payment gateways
+router.post('/orders/auto-verify-all', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const pendingOrders = await prisma.order.findMany({
+      where: {
+        OR: [
+          { status: 'PENDING' },
+          { paymentStatus: 'PENDING' },
+          { paymentStatus: 'UNPAID' },
+        ],
+        createdAt: { gte: cutoff },
+      },
+      include: { package: { include: { product: true } } },
+    });
+
+    let verifiedCount = 0;
+    const { verifyAbaKhqrPayment, processVerifiedPayment } = await import('../utils/paymentVerification');
+
+    for (const order of pendingOrders) {
+      try {
+        const isPaid = await verifyAbaKhqrPayment(order);
+        if (isPaid) {
+          await processVerifiedPayment(order, `ADMIN-AUTO-${order.paymentMd5 || order.paymentTxnId}`);
+          verifiedCount++;
+        }
+      } catch (err) {
+        console.error(`[Admin Auto-Verify] Error checking order ${order.paymentTxnId}:`, err);
+      }
+    }
+
+    broadcastRealtimeEvent('orders-realtime', 'ORDERS_AUTO_VERIFIED', {
+      totalChecked: pendingOrders.length,
+      verifiedPaid: verifiedCount,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Auto-check completed: ${pendingOrders.length} pending orders checked, ${verifiedCount} paid orders automatically verified & fulfilled!`,
+      totalChecked: pendingOrders.length,
+      verifiedPaid: verifiedCount,
+    });
+  } catch (error: any) {
+    console.error('Admin auto-verify-all error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Auto-verify failed' });
+  }
+});
+
+// 3.2. Auto-fulfill a specific order (instant delivery & settlement)
+router.post('/orders/:id/auto-fulfill', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const order = await prisma.order.findFirst({
+      where: { OR: [{ id }, { paymentTxnId: id }] },
+      include: { package: { include: { product: true } } },
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+
+    const { processVerifiedPayment } = await import('../utils/paymentVerification');
+    const result = await processVerifiedPayment(order, `ADMIN-AUTO-FULFILL-${Date.now()}`);
+
+    broadcastRealtimeEvent('orders-realtime', 'ORDER_AUTO_FULFILLED', {
+      id: order.id,
+      paymentTxnId: order.paymentTxnId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Order #${order.paymentTxnId.slice(0, 12)} auto-fulfilled and completed successfully!`,
+      order: result.currentOrder,
+      stockCode: result.deliveredCode,
+    });
+  } catch (error: any) {
+    console.error('Admin auto-fulfill error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Auto-fulfill failed' });
+  }
+});
+
 // 4. Stock management: Get stock levels
 router.get('/stock', async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -418,7 +564,7 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
     });
   } catch (error: any) {
     console.error('Admin add product error:', error);
-    return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -432,15 +578,24 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
       return res.status(400).json({ error: 'Name, amount and price are required' });
     }
 
-    // Verify product exists
-    const product = await prisma.product.findUnique({ where: { id: productId } });
+    // Verify product exists by id or slug
+    const product = await prisma.product.findFirst({
+      where: {
+        OR: [
+          { id: productId },
+          { slug: productId },
+          { name: { equals: productId, mode: 'insensitive' } },
+        ],
+      },
+    });
+
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
     const newPackage = await prisma.package.create({
       data: {
-        productId,
+        productId: product.id,
         name,
         amount: parseInt(amount, 10),
         price: parseFloat(price),
@@ -504,7 +659,7 @@ router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest
     return res.status(200).json({ message: 'Product updated successfully', product: updated });
   } catch (error: any) {
     console.error('Admin update product error:', error);
-    return res.status(500).json({ error: 'Failed to update product: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to update product' });
   }
 });
 
@@ -556,29 +711,82 @@ router.patch(['/packages/:id', '/package/:id'], async (req: AuthenticatedRequest
       });
       console.log(`[Admin Dashboard] Updated package: ${resultPackage.name} ($${resultPackage.price})`);
     } else {
-      // Find suitable product to link new package
-      let targetProductId = productId;
-      if (!targetProductId) {
-        const anyProduct = await prisma.product.findFirst();
-        if (!anyProduct) {
-          return res.status(404).json({ error: 'Product not found to attach this package' });
-        }
-        targetProductId = anyProduct.id;
+      // Robust Product Resolution to guarantee Foreign Key validity
+      let targetProduct = null;
+      if (productId) {
+        targetProduct = await prisma.product.findFirst({
+          where: {
+            OR: [
+              { id: productId },
+              { slug: productId },
+              { name: { equals: productId, mode: 'insensitive' } },
+            ],
+          },
+        });
       }
 
-      resultPackage = await prisma.package.create({
-        data: {
-          productId: targetProductId,
-          name: name || 'New Package',
-          amount: amount !== undefined ? parseInt(amount, 10) : 100,
-          price: price !== undefined ? parseFloat(price) : 0.99,
-          category: category || 'NORMAL',
-          badge: badge || null,
-          image: image || null,
-          isActive: isActive !== undefined ? isActive : true,
+      if (!targetProduct && id) {
+        const parts = id.split('-');
+        const possibleProductSlug = parts.length > 1 ? parts.slice(0, -1).join('-') : id;
+        targetProduct = await prisma.product.findFirst({
+          where: {
+            OR: [
+              { id },
+              { slug: id },
+              { slug: possibleProductSlug },
+            ],
+          },
+        });
+      }
+
+      if (!targetProduct) {
+        targetProduct = await prisma.product.findFirst();
+      }
+
+      if (!targetProduct) {
+        targetProduct = await prisma.product.create({
+          data: {
+            name: 'General Games',
+            slug: 'general-games',
+            image: '/images/games/freefire.png',
+            category: 'MOBILE_GAME',
+            isActive: true,
+          },
+        });
+      }
+
+      // Check if this product already has a matching package to update instead
+      const duplicatePkg = await prisma.package.findFirst({
+        where: {
+          productId: targetProduct.id,
+          OR: [
+            name ? { name: { equals: name, mode: 'insensitive' } } : {},
+            amount !== undefined ? { amount: parseInt(amount, 10) } : {},
+          ],
         },
       });
-      console.log(`[Admin Dashboard] Upserted missing package: ${resultPackage.name} ($${resultPackage.price})`);
+
+      if (duplicatePkg) {
+        resultPackage = await prisma.package.update({
+          where: { id: duplicatePkg.id },
+          data,
+        });
+        console.log(`[Admin Dashboard] Updated existing package: ${resultPackage.name} ($${resultPackage.price})`);
+      } else {
+        resultPackage = await prisma.package.create({
+          data: {
+            productId: targetProduct.id,
+            name: name || 'New Package',
+            amount: amount !== undefined ? parseInt(amount, 10) : 100,
+            price: price !== undefined ? parseFloat(price) : 0.99,
+            category: category || 'NORMAL',
+            badge: badge || null,
+            image: image || null,
+            isActive: isActive !== undefined ? isActive : true,
+          },
+        });
+        console.log(`[Admin Dashboard] Upserted package under ${targetProduct.name}: ${resultPackage.name} ($${resultPackage.price})`);
+      }
     }
 
     broadcastRealtimeEvent('products-catalog-realtime', 'PACKAGE_UPDATED', { package: resultPackage });
@@ -639,7 +847,7 @@ router.delete('/products/:id', async (req: AuthenticatedRequest, res: Response) 
     return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
   } catch (error: any) {
     console.error('Admin delete product error:', error);
-    return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to delete product' });
   }
 });
 
@@ -682,7 +890,7 @@ router.delete('/packages/:id', async (req: AuthenticatedRequest, res: Response) 
     return res.status(200).json({ message: 'Package deleted successfully', id: pkg.id });
   } catch (error: any) {
     console.error('Admin delete package error:', error);
-    return res.status(500).json({ error: 'Failed to delete package: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to delete package' });
   }
 });
 
@@ -923,7 +1131,7 @@ router.post('/backup/restore', async (req: AuthenticatedRequest, res: Response) 
     });
   } catch (error: any) {
     console.error('Backup restore error:', error);
-    return res.status(500).json({ error: 'Failed to restore backup: ' + (error.message || '') });
+    return res.status(500).json({ error: 'Failed to restore backup' });
   }
 });
 
@@ -939,6 +1147,94 @@ router.delete('/backup/snapshots/:filename', async (req: AuthenticatedRequest, r
   } catch (error: any) {
     console.error('Delete snapshot error:', error);
     return res.status(500).json({ error: 'Failed to delete snapshot' });
+  }
+});
+
+// ─── 15. Contact Messages Management ──────────────────────────────────────────
+// List all contact messages with search and filtering
+router.get('/contact', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { status, search, limit = '50', page = '1' } = req.query;
+    const take = parseInt(limit as string, 10) || 50;
+    const skip = ((parseInt(page as string, 10) || 1) - 1) * take;
+
+    const where: any = {};
+    if (status && status !== 'ALL') {
+      where.status = status as string;
+    }
+
+    if (search && typeof search === 'string') {
+      const q = search.trim();
+      where.OR = [
+        { name: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { subject: { contains: q, mode: 'insensitive' } },
+        { message: { contains: q, mode: 'insensitive' } },
+        { telegram: { contains: q, mode: 'insensitive' } },
+        { txnId: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const [messages, total, pendingCount] = await Promise.all([
+      prisma.contactMessage.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      prisma.contactMessage.count({ where }),
+      prisma.contactMessage.count({ where: { status: 'PENDING' } }),
+    ]);
+
+    return res.status(200).json({
+      messages,
+      total,
+      pendingCount,
+      page: parseInt(page as string, 10) || 1,
+      totalPages: Math.ceil(total / take) || 1,
+    });
+  } catch (error: any) {
+    console.error('Admin get contact messages error:', error);
+    return res.status(500).json({ error: 'Failed to fetch contact messages' });
+  }
+});
+
+// Update a contact message (status, admin reply)
+router.patch('/contact/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status, reply } = req.body;
+
+    const updated = await prisma.contactMessage.update({
+      where: { id },
+      data: {
+        ...(status ? { status } : {}),
+        ...(reply !== undefined ? { reply } : {}),
+      },
+    });
+
+    try {
+      await broadcastRealtimeEvent('contact_messages', 'UPDATE', updated);
+    } catch (e) {
+      console.warn('Realtime broadcast failed:', e);
+    }
+
+    return res.status(200).json({ success: true, message: updated });
+  } catch (error: any) {
+    console.error('Admin update contact message error:', error);
+    return res.status(500).json({ error: 'Failed to update contact message' });
+  }
+});
+
+// Delete a contact message
+router.delete('/contact/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    await prisma.contactMessage.delete({ where: { id } });
+    return res.status(200).json({ success: true, message: 'Message deleted' });
+  } catch (error: any) {
+    console.error('Admin delete contact message error:', error);
+    return res.status(500).json({ error: 'Failed to delete contact message' });
   }
 });
 

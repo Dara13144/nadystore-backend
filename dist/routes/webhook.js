@@ -96,13 +96,13 @@ router.post('/', async (req, res) => {
                 const expected = crypto.createHmac('sha256', cutluySecret).update(`${parts.t}.${rawBody}`).digest('hex');
                 if (parts.v1 && parts.v1 !== expected) {
                     console.warn('[Webhook] [CutLuy] ⚠️ Invalid X-CutLuy-Signature');
+                    return res.status(401).json({ error: 'Invalid webhook signature' });
                 }
-                else {
-                    console.log('[Webhook] [CutLuy] ✅ Signature verified.');
-                }
+                console.log('[Webhook] [CutLuy] ✅ Signature verified.');
             }
             catch (e) {
                 console.error('[Webhook] [CutLuy] Signature check error:', e.message);
+                return res.status(401).json({ error: 'Webhook signature verification failed' });
             }
         }
         // Webhook signature verification

@@ -12,6 +12,9 @@ const router = (0, express_1.Router)();
 // 1. Get all products with active packages (Public)
 router.get('/', async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
         const products = await prisma_1.default.product.findMany({
             where: { isActive: true },
             include: {
@@ -27,8 +30,7 @@ router.get('/', async (req, res) => {
     catch (error) {
         console.error("DATABASE ERROR:", error);
         return res.status(500).json({
-            error: "Database error",
-            details: error.message || String(error),
+            error: "Internal database error",
         });
     }
 });
@@ -60,6 +62,9 @@ router.get('/lookup/:gameSlug', async (req, res) => {
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
         const rawSlug = decodeURIComponent(req.params.slug).trim();
         const slug = rawSlug.toLowerCase();
         const product = await prisma_1.default.product.findFirst({
@@ -169,7 +174,7 @@ router.post('/', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, res) =
     }
     catch (error) {
         console.error('Error creating product:', error);
-        return res.status(500).json({ error: 'Internal server error: ' + (error.message || '') });
+        return res.status(500).json({ error: 'Failed to create product' });
     }
 });
 // 5. Update Product
@@ -218,15 +223,26 @@ router.delete('/:id', auth_1.authenticateJWT, auth_1.requireAdmin, async (req, r
         await prisma_1.default.product.delete({
             where: { id: product.id },
         });
+        // 5. Verification: verify record is truly gone from database
+        const remainingGame = await prisma_1.default.product.findUnique({
+            where: { id: product.id },
+            select: { id: true },
+        });
+        if (remainingGame) {
+            return res.status(500).json({
+                success: false,
+                error: 'Product still exists in database after delete operation',
+            });
+        }
         (0, supabase_1.broadcastRealtimeEvent)('products-catalog-realtime', 'PRODUCT_DELETED', {
             id: product.id,
             slug: product.slug,
         });
-        return res.status(200).json({ message: 'Product deleted successfully', id: product.id });
+        return res.status(200).json({ success: true, message: 'Product deleted successfully', id: product.id });
     }
     catch (error) {
         console.error('Error deleting product:', error);
-        return res.status(500).json({ error: 'Failed to delete product: ' + (error.message || '') });
+        return res.status(500).json({ error: 'Failed to delete product' });
     }
 });
 // 7. Add Package to Product

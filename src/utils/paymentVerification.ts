@@ -24,21 +24,18 @@ export async function verifyAbaKhqrPayment(order: any): Promise<boolean> {
   const txnId = order.paymentTxnId as string;
   const md5   = order.paymentMd5 as string | null;
 
-  if (!md5) {
-    logErr('Verification', txnId, 'No MD5 hash stored for this order -- cannot verify.');
-    return false;
-  }
-
-  log('Verification', txnId, `Starting gateway verification. MD5=${md5} Amount=$${order.price}`);
+  log('Verification', txnId, `Starting gateway verification. MD5=${md5 || 'N/A'} Amount=$${order.price} Method=${order.paymentMethod}`);
 
   // -- 1. Replay attack guard ------------------------------------------------
-  const replayOrder = await prisma.order.findFirst({
-    where: { paymentMd5: md5, paymentStatus: 'PAID', id: { not: order.id } },
-  });
-  if (replayOrder) {
-    logErr('Verification', txnId,
-      `REPLAY ATTACK: MD5 "${md5}" already used by paid order "${replayOrder.paymentTxnId}". Rejecting.`);
-    return false;
+  if (md5) {
+    const replayOrder = await prisma.order.findFirst({
+      where: { paymentMd5: md5, paymentStatus: 'PAID', id: { not: order.id } },
+    });
+    if (replayOrder) {
+      logErr('Verification', txnId,
+        `REPLAY ATTACK: MD5 "${md5}" already used by paid order "${replayOrder.paymentTxnId}". Rejecting.`);
+      return false;
+    }
   }
 
   // -- 1.4. Direct VNGZZ2GAME payment check --------------------------------
@@ -87,23 +84,25 @@ export async function verifyAbaKhqrPayment(order: any): Promise<boolean> {
     }
   }
 
-  // -- 2. Live gateway check -------------------------------------------------
-  const ctx: PaymentVerificationContext = {
-    expectedAmount:     order.price,
-    expectedCurrency:   'USD',
-    expectedMerchantId: process.env.BAKONG_ACCOUNT_ID ? process.env.BAKONG_ACCOUNT_ID.replace(/['"]/g, '').trim() : undefined,
-  };
-  const khpayTxnId = txnId.startsWith('bk_') ? txnId : undefined;
+  // -- 2. Live gateway check (Bakong KHQR) -----------------------------------
+  if (md5) {
+    const ctx: PaymentVerificationContext = {
+      expectedAmount:     order.price,
+      expectedCurrency:   'USD',
+      expectedMerchantId: process.env.BAKONG_ACCOUNT_ID ? process.env.BAKONG_ACCOUNT_ID.replace(/['"]/g, '').trim() : undefined,
+    };
+    const khpayTxnId = txnId.startsWith('bk_') ? txnId : undefined;
 
-  try {
-    const isPaid = await checkBakongPaymentStatus(md5, khpayTxnId, ctx);
-    if (isPaid) {
-      log('Verification', txnId, 'Gateway confirmed payment PAID.');
-      return true;
+    try {
+      const isPaid = await checkBakongPaymentStatus(md5 as string, khpayTxnId, ctx);
+      if (isPaid) {
+        log('Verification', txnId, 'Gateway confirmed payment PAID.');
+        return true;
+      }
+      log('Verification', txnId, 'Gateway returned NOT PAID yet.');
+    } catch (err: any) {
+      logErr('Verification', txnId, `Gateway call error: ${err.message || err}`);
     }
-    log('Verification', txnId, 'Gateway returned NOT PAID yet.');
-  } catch (err: any) {
-    logErr('Verification', txnId, `Gateway call error: ${err.message || err}`);
   }
 
   // -- 3. Sandbox auto-approve (testing only) --------------------------------

@@ -73,60 +73,34 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         }).catch(() => null);
       }
 
-      // If no product exists in DB at all, create default product
+      // If no active product found, reject with 404
       if (!prod) {
-        const fallbackSlug = targetSlug || 'free-fire';
-        const fallbackName = fallbackSlug.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
-        prod = await prisma.product.create({
-          data: {
-            name: fallbackName,
-            slug: fallbackSlug,
-            category: 'MOBILE_GAME',
-            image: `/images/games/${fallbackSlug}.png`,
-            isActive: true,
-          },
-          include: { packages: true },
-        }).catch(() => null);
+        return res.status(404).json({ error: 'Game not found or currently unavailable' });
       }
 
-      if (prod) {
-        if (packageName) {
-          pkg = prod.packages.find((p: any) => p.name.toLowerCase() === packageName.toLowerCase()) || null;
-        }
-        if (!pkg && price) {
-          pkg = prod.packages.find((p: any) => Math.abs(p.price - parseFloat(price)) < 0.05) || null;
-        }
-        if (!pkg && amount) {
-          pkg = prod.packages.find((p: any) => p.amount === parseInt(String(amount), 10)) || null;
-        }
-        if (!pkg && prod.packages.length > 0) {
-          pkg = prod.packages[0];
-        }
+      if (packageName) {
+        pkg = prod.packages.find((p: any) => p.name.toLowerCase() === packageName.toLowerCase()) || null;
+      }
+      if (!pkg && price) {
+        pkg = prod.packages.find((p: any) => Math.abs(p.price - parseFloat(price)) < 0.05) || null;
+      }
+      if (!pkg && amount) {
+        pkg = prod.packages.find((p: any) => p.amount === parseInt(String(amount), 10)) || null;
+      }
+      if (!pkg && prod.packages.length > 0) {
+        pkg = prod.packages[0];
+      }
 
-        if (pkg) {
-          pkg = await prisma.package.findUnique({
-            where: { id: pkg.id },
-            include: { product: true },
-          }).catch(() => null);
-        } else {
-          // Provision missing package on the fly
-          pkg = await prisma.package.create({
-            data: {
-              productId: prod.id,
-              name: packageName || `${amount || 50} Diamonds`,
-              amount: parseInt(String(amount || 50), 10),
-              price: parseFloat(String(price || 0.99)),
-              category: 'NORMAL',
-              isActive: true,
-            },
-            include: { product: true },
-          }).catch(() => null);
-        }
+      if (pkg) {
+        pkg = await prisma.package.findUnique({
+          where: { id: pkg.id },
+          include: { product: true },
+        }).catch(() => null);
       }
     }
 
-    if (!pkg) {
-      return res.status(404).json({ error: 'Package not found' });
+    if (!pkg || !pkg.isActive) {
+      return res.status(404).json({ error: 'Package not found or currently inactive' });
     }
 
     // Validate Player ID and retrieve nickname (non-blocking)
@@ -303,7 +277,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     });
   } catch (error: any) {
     console.error('Order creation error:', error);
-    return res.status(500).json({ error: error.message || 'Internal server error' });
+    return res.status(500).json({ error: 'Failed to process order. Please try again.' });
   }
 });
 
@@ -428,8 +402,9 @@ router.post('/verify/:txnId', async (req, res) => {
       return res.status(410).json({ verified: false, error: 'Order has expired. Please create a new order.' });
     }
 
-    if (order.paymentMethod !== 'BAKONG' && order.paymentMethod !== 'ABA' && process.env.SANDBOX_MODE !== 'true') {
-      return res.status(400).json({ verified: false, error: 'Verify only supports BAKONG/ABA orders' });
+    const supportedMethods = ['BAKONG', 'ABA', 'CANADIA', 'CUTLUY', 'WALLET'];
+    if (!supportedMethods.includes(order.paymentMethod) && process.env.SANDBOX_MODE !== 'true') {
+      return res.status(400).json({ verified: false, error: `Verify does not support ${order.paymentMethod} orders` });
     }
 
     // Delegate verification to paymentVerification service

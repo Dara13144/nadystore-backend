@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS "Package" (
 
 -- 2.4 Order Table (Top-Up Transactions & KHQR Invoices)
 CREATE TABLE IF NOT EXISTS "Order" (
-    "id" TEXT PRIMARY KEY DEFAULT ('c' || substr(md5(random()::text || clock_timestamp()::text), 1, 24)),
+    "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     "userId" TEXT,
     "packageId" TEXT NOT NULL,
     "playerId" TEXT NOT NULL,
@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS "Order" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Order_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE,
-    CONSTRAINT "Order_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "Order_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- 2.5 Stock Table (Digital Voucher Gift Codes / Serial Keys)
 CREATE TABLE IF NOT EXISTS "Stock" (
-    "id" TEXT PRIMARY KEY DEFAULT ('c' || substr(md5(random()::text || clock_timestamp()::text), 1, 24)),
+    "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     "packageId" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "isUsed" BOOLEAN NOT NULL DEFAULT false,
@@ -84,6 +84,36 @@ CREATE TABLE IF NOT EXISTS "Stock" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Stock_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- 2.6 Contact Message Table (Live Inquiries & Support)
+CREATE TABLE IF NOT EXISTS "ContactMessage" (
+    "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    "name" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "phone" TEXT,
+    "topic" TEXT DEFAULT 'General',
+    "message" TEXT NOT NULL,
+    "status" TEXT DEFAULT 'PENDING' NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2.7 System Settings Table
+CREATE TABLE IF NOT EXISTS "SystemSetting" (
+    "key" TEXT PRIMARY KEY,
+    "value" TEXT NOT NULL,
+    "description" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2.8 Audit Log Table
+CREATE TABLE IF NOT EXISTS "AuditLog" (
+    "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    "action" TEXT NOT NULL,
+    "performedBy" TEXT,
+    "details" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ====================================================================
@@ -176,13 +206,16 @@ ALTER TABLE "Package" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "User" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Order" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "Stock" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ContactMessage" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SystemSetting" ENABLE ROW LEVEL SECURITY;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, service_role;
-GRANT SELECT ON "Product", "Package" TO anon, authenticated;
+GRANT SELECT ON "Product", "Package", "SystemSetting" TO anon, authenticated;
 GRANT SELECT, INSERT ON "Order" TO anon, authenticated;
+GRANT SELECT, INSERT ON "ContactMessage" TO anon, authenticated;
 
 DROP POLICY IF EXISTS "Public can view active products" ON "Product";
 CREATE POLICY "Public can view active products" ON "Product" FOR SELECT TO anon, authenticated USING (true);
@@ -195,6 +228,15 @@ CREATE POLICY "Public can create orders" ON "Order" FOR INSERT TO anon, authenti
 
 DROP POLICY IF EXISTS "Public can view orders" ON "Order";
 CREATE POLICY "Public can view orders" ON "Order" FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Public can submit contact messages" ON "ContactMessage";
+CREATE POLICY "Public can submit contact messages" ON "ContactMessage" FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public can view contact messages" ON "ContactMessage";
+CREATE POLICY "Public can view contact messages" ON "ContactMessage" FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Public can view system settings" ON "SystemSetting";
+CREATE POLICY "Public can view system settings" ON "SystemSetting" FOR SELECT TO anon, authenticated USING (true);
 
 DROP POLICY IF EXISTS "Users can view own profile" ON "User";
 CREATE POLICY "Users can view own profile" ON "User" FOR SELECT TO authenticated USING (auth.uid()::text = id OR email = (auth.jwt() ->> 'email'));
@@ -438,18 +480,18 @@ WHERE NOT EXISTS (SELECT 1 FROM "Package" pkg WHERE pkg."productId" = p.id);
 -- ====================================================================
 -- 9. SUPABASE REALTIME CONFIGURATION
 -- ====================================================================
+ALTER TABLE "Order" REPLICA IDENTITY FULL;
+ALTER TABLE "Product" REPLICA IDENTITY FULL;
+ALTER TABLE "Package" REPLICA IDENTITY FULL;
+ALTER TABLE "Stock" REPLICA IDENTITY FULL;
+ALTER TABLE "ContactMessage" REPLICA IDENTITY FULL;
+ALTER TABLE "User" REPLICA IDENTITY FULL;
+ALTER TABLE "SystemSetting" REPLICA IDENTITY FULL;
+
 DO $$
 BEGIN
   BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE "Order";
-  EXCEPTION WHEN OTHERS THEN NULL;
-  END;
-  BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE "Product";
-  EXCEPTION WHEN OTHERS THEN NULL;
-  END;
-  BEGIN
-    ALTER PUBLICATION supabase_realtime ADD TABLE "Package";
+    ALTER PUBLICATION supabase_realtime ADD TABLE "Order", "Product", "Package", "Stock", "ContactMessage", "User", "SystemSetting";
   EXCEPTION WHEN OTHERS THEN NULL;
   END;
 END $$;
