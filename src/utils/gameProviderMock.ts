@@ -262,7 +262,7 @@ async function vngzz2gameLookup(
     } else {
       const errData = (await response.json().catch(() => ({}))) as any;
       if (errData && errData.message && errData.valid === false) {
-        console.warn(`[VNGZZ2GAME API] Explicit validation result: ${errData.message}`);
+        console.warn(`[VNGZZ2GAME API] Validation note: ${errData.message}`);
         if (errData.message.includes('User not found') || errData.message.includes('invalid')) {
           return { success: false, error: errData.message };
         }
@@ -404,11 +404,15 @@ async function mrxApiLookup(
     }
 
     const data = (await response.json()) as any;
-    if (data && data.success === true) {
-      const nickname = data.name || data.nickname || '';
+    if (data && (data.success === true || data.status === 200 || data.status === 'success' || data.name || data.username)) {
+      const nickname = data.name || data.username || data.nickname || data.data?.name || data.data?.username || data.data?.nickname || '';
       if (nickname) {
         return { success: true, nickname };
       }
+    }
+
+    if (data && (data.success === false || data.message)) {
+      return { success: false, error: data.message || 'រកមិនឃើញគណនី ឬ User ID មិនត្រឹមត្រូវទេ' };
     }
 
     return null;
@@ -419,7 +423,7 @@ async function mrxApiLookup(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT: lookupPlayerNickname
-// Strategy: Sandbox accounts → VNGZZ2GAME Live API → mrxtopup → Vercel → Roblox → Sandbox Fallback
+// Strategy: Sandbox accounts → Live Multi-Provider Pipeline → Sandbox Fallback
 // ─────────────────────────────────────────────────────────────────────────────
 export async function lookupPlayerNickname(
   gameSlug: string,
@@ -447,36 +451,60 @@ export async function lookupPlayerNickname(
     return { success: true, nickname: SANDBOX_ACCOUNTS[baseSlug][trimmedId] };
   }
 
-  // ── 0. VNGZZ2GAME Official API Lookup ────────────────────────────────────
+  // ── Mobile Legends Real In-Game Name Multi-Provider Pipeline ──────────────
+  if (baseSlug === 'mobile-legends') {
+    if (!playerZoneId || !playerZoneId.trim()) {
+      return { success: false, error: 'Zone ID is required for Mobile Legends' };
+    }
+
+    // 1. Try mrxtopup (Cambodian direct Moonton gateway)
+    const mrxResult = await mrxApiLookup(gameSlug, trimmedId, playerZoneId);
+    if (mrxResult && mrxResult.success && mrxResult.nickname) {
+      console.log(`[MLBB Real Name] ✅ Found via mrxtopup: ${mrxResult.nickname}`);
+      return mrxResult;
+    }
+
+    // 2. Try VNGZZ2GAME Official Partner API
+    const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId, playerZoneId);
+    if (vngzzResult && vngzzResult.success && vngzzResult.nickname) {
+      console.log(`[MLBB Real Name] ✅ Found via VNGZZ: ${vngzzResult.nickname}`);
+      return vngzzResult;
+    }
+
+    // 3. Try Vercel / Gateway API
+    const vercelResult = await liveApiLookup('mobile_legends', trimmedId, playerZoneId);
+    if (vercelResult && vercelResult.success && vercelResult.nickname) {
+      console.log(`[MLBB Real Name] ✅ Found via Vercel Gateway: ${vercelResult.nickname}`);
+      return vercelResult;
+    }
+
+    // Explicit error from live providers if user does not exist
+    if (mrxResult && !mrxResult.success && mrxResult.error) {
+      return mrxResult;
+    }
+    if (vngzzResult && !vngzzResult.success && vngzzResult.error) {
+      return {
+        success: false,
+        error: 'រកមិនឃើញឈ្មោះគណនី Mobile Legends នេះទេ។ សូមពិនិត្យមើល User ID និង Zone ID ម្ដងទៀត (Mobile Legends User ID or Zone ID not found).'
+      };
+    }
+
+    console.log(`[Game Provider API] Live APIs unavailable for ${gameSlug}. Using sandbox resolver.`);
+    return sandboxLookup(gameSlug, trimmedId, playerZoneId);
+  }
+
+  // ── 0. VNGZZ2GAME Official API Lookup for other games ─────────────────────
   const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId, playerZoneId);
   if (vngzzResult !== null) {
     return vngzzResult;
   }
 
-  // ── 1. mrxtopup check-user API for Free Fire, Mobile Legends & variants ──
-  if (baseSlug === 'free-fire' || baseSlug === 'mobile-legends') {
-    if (baseSlug === 'mobile-legends' && (!playerZoneId || !playerZoneId.trim())) {
-      return { success: false, error: 'Zone ID is required for Mobile Legends' };
-    }
-
+  // ── 1. Free Fire live API lookup ──────────────────────────────────────────
+  if (baseSlug === 'free-fire') {
     const liveResult = await mrxApiLookup(gameSlug, trimmedId, playerZoneId);
-
     if (liveResult !== null) {
-      if (!liveResult.success) {
-        return liveResult;
-      }
       return liveResult;
     }
-
-    // Secondary fallback for Mobile Legends: Vercel check-id-game gateway
-    if (baseSlug === 'mobile-legends') {
-      const vercelResult = await liveApiLookup('mobile_legends', trimmedId, playerZoneId);
-      if (vercelResult !== null && vercelResult.success) {
-        return vercelResult;
-      }
-    }
-
-    console.log(`[Game Provider API] Live APIs unavailable for ${gameSlug}. Using sandbox resolver.`);
     return sandboxLookup(gameSlug, trimmedId, playerZoneId);
   }
 
