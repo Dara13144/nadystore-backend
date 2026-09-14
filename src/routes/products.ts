@@ -52,8 +52,8 @@ const handlePlayerLookup = async (req: Request, res: Response) => {
         region: result.region || 'Cambodia (Asia)',
         level: result.level || 45,
         avatarUrl: result.avatarUrl || '/images/games/mlbb.png',
-        playerId: playerId.trim(),
-        playerZoneId: playerZoneId.trim() || null,
+        playerId: result.playerId || playerId.trim(),
+        playerZoneId: result.playerZoneId || (playerZoneId ? playerZoneId.trim() : null),
       });
     }
 

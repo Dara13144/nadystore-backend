@@ -20,12 +20,21 @@ export interface DeliveryResult {
 // ─────────────────────────────────────────────────────────────────────────────
 const SANDBOX_ACCOUNTS: Record<string, Record<string, string>> = {
   'free-fire': {
+    '11676873799': 'Darazzzzz1k',
+    '12345678': '🔥 ProGamer_FF_KH',
+    '87654321': '⚔️ Slayer_King',
+    '11111111': '🐉 FF_Dragon_KH',
+    '99887766': '💎 Dara_Legend_FF',
+  },
+  'freefire': {
+    '11676873799': 'Darazzzzz1k',
     '12345678': '🔥 ProGamer_FF_KH',
     '87654321': '⚔️ Slayer_King',
     '11111111': '🐉 FF_Dragon_KH',
     '99887766': '💎 Dara_Legend_FF',
   },
   'mobile-legends': {
+    '1523754961|11766': 'oNLymYdANiTh',
     '12345678|1234': '⚔️ MLBB_Pro_Gamer',
     '123456789|1234': '🌟 MLBB_Legend_KH',
     '123456|1234': '💎 MLBB_Mythic_Player',
@@ -38,6 +47,7 @@ const SANDBOX_ACCOUNTS: Record<string, Record<string, string>> = {
     '555555|5555': '🎯 MLBB_Sharpshooter',
   },
   'mobile-legend': {
+    '1523754961|11766': 'oNLymYdANiTh',
     '12345678|1234': '⚔️ MLBB_Pro_Gamer',
     '123456789|1234': '🌟 MLBB_Legend_KH',
     '123456|1234': '💎 MLBB_Mythic_Player',
@@ -50,6 +60,7 @@ const SANDBOX_ACCOUNTS: Record<string, Record<string, string>> = {
     '555555|5555': '🎯 MLBB_Sharpshooter',
   },
   'moonton-mlbb': {
+    '1523754961|11766': 'oNLymYdANiTh',
     '12345678|1234': '⚔️ MLBB_Pro_Gamer',
     '998877|1234': '🌟 MLBB_Legend_KH',
     '111222|5678': '⚔️ Star_Hunter_KH',
@@ -212,66 +223,89 @@ async function vngzz2gameLookup(
   const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
   const apiUrl = process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game';
 
-  let gameCode = '';
   const slugLower = gameSlug.toLowerCase();
-  if (slugLower.includes('free-fire') || slugLower.includes('freefire')) {
-    gameCode = slugLower.includes('global') ? 'freefire_global' : 'freefire_sgmy';
-  } else if (slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton')) {
-    gameCode = slugLower.includes('global') ? 'mlbb_global' : 'mlbb';
-  } else if (slugLower.includes('pubg')) {
-    gameCode = 'pubgm';
-  } else if (slugLower.includes('honor-of-kings') || slugLower.includes('hok')) {
-    gameCode = 'hok';
-  } else if (slugLower.includes('farlight')) {
-    gameCode = 'farlight84';
-  } else if (slugLower.includes('blood-strike')) {
-    gameCode = 'blood_strike';
-  }
+  const isFF = slugLower.includes('free-fire') || slugLower.includes('freefire');
+  const isMLBB = slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton');
 
-  if (!gameCode || !apiKey) return null;
-
-  try {
-    let url = `${apiUrl}/check_id?game=${gameCode}&userid=${encodeURIComponent(playerId.trim())}`;
-    if (playerZoneId && playerZoneId.trim()) {
-      url += `&serverid=${encodeURIComponent(playerZoneId.trim())}`;
-    }
-
-    console.log(`[Game Provider API] [VNGZZ2GAME] Querying check_id: ${url}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'X-API-Key': apiKey,
-        'Accept': 'application/json',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      const data = (await response.json()) as any;
-      if (data.status === 'APPROVED' || data.status === 200 || data.valid === true || data.success === true) {
-        const nickname = data.username || data.data?.username || data.data?.nickname || data.data?.name || data.name || data.nickname;
-        if (nickname) {
-          console.log(`[VNGZZ2GAME API] ✅ Found player nickname: ${nickname}`);
-          return { success: true, nickname };
-        }
-      }
+  const gameCodesToTry: string[] = [];
+  if (isFF) {
+    if (slugLower.includes('global')) {
+      gameCodesToTry.push('freefire_global', 'freefire_sgmy');
     } else {
-      const errData = (await response.json().catch(() => ({}))) as any;
-      if (errData && errData.message && errData.valid === false) {
-        console.warn(`[VNGZZ2GAME API] Validation note: ${errData.message}`);
-        if (errData.message.includes('User not found') || errData.message.includes('invalid')) {
-          return { success: false, error: errData.message };
+      gameCodesToTry.push('freefire_sgmy', 'freefire_global');
+    }
+  } else if (isMLBB) {
+    gameCodesToTry.push(slugLower.includes('global') ? 'mlbb_global' : 'mlbb');
+  } else if (slugLower.includes('pubg')) {
+    gameCodesToTry.push('pubgm');
+  } else if (slugLower.includes('honor-of-kings') || slugLower.includes('hok')) {
+    gameCodesToTry.push('hok');
+  } else if (slugLower.includes('farlight')) {
+    gameCodesToTry.push('farlight84');
+  } else if (slugLower.includes('blood-strike')) {
+    gameCodesToTry.push('blood_strike');
+  }
+
+  if (gameCodesToTry.length === 0 || !apiKey) return null;
+
+  const cleanId = playerId.trim().replace(/[^\d]/g, '');
+  const cleanZone = playerZoneId ? playerZoneId.trim().replace(/[^\d]/g, '') : '';
+  const avatarUrl = isFF ? '/images/games/freefire.png' : (isMLBB ? '/images/games/mlbb.png' : `/images/games/${gameSlug}.png`);
+
+  for (const gameCode of gameCodesToTry) {
+    try {
+      let url = `${apiUrl}/check_id?game=${gameCode}&userid=${encodeURIComponent(cleanId)}`;
+      if (cleanZone) {
+        url += `&serverid=${encodeURIComponent(cleanZone)}`;
+      }
+
+      console.log(`[Game Provider API] [VNGZZ2GAME] Querying check_id: ${url}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'X-API-Key': apiKey,
+          'Accept': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const data = (await response.json()) as any;
+        if (data.status === 'APPROVED' || data.status === 200 || data.valid === true || data.success === true) {
+          const nickname = data.username || data.data?.username || data.data?.nickname || data.data?.name || data.name || data.nickname;
+          if (nickname) {
+            console.log(`[VNGZZ2GAME API] ✅ Found player nickname: ${nickname}`);
+            return {
+              success: true,
+              nickname,
+              region: data.region || 'Cambodia (Asia)',
+              level: 50,
+              playerId: cleanId,
+              playerZoneId: cleanZone || undefined,
+              avatarUrl
+            };
+          }
+        }
+      } else {
+        const errData = (await response.json().catch(() => ({}))) as any;
+        if (errData && errData.message && errData.valid === false) {
+          console.warn(`[VNGZZ2GAME API] Validation note on ${gameCode}: ${errData.message}`);
         }
       }
+    } catch (e: any) {
+      console.warn(`[VNGZZ2GAME API] Lookup error on ${gameCode}:`, e.message);
     }
-  } catch (e: any) {
-    console.warn('[VNGZZ2GAME API] Lookup error/timeout:', e.message);
   }
-  return null;
+
+  const notFoundMsg = isFF
+    ? 'រកមិនឃើញគណនី Free Fire នេះទេ។ សូមពិនិត្យមើល Player ID ម្ដងទៀត'
+    : (isMLBB ? 'រកមិនឃើញគណនី Mobile Legends នេះទេ។ សូមពិនិត្យមើល User ID និង Zone ID ម្ដងទៀត' : 'រកមិនឃើញគណនីហ្គេមនេះទេ។ សូមពិនិត្យមើល Player ID ម្ដងទៀត');
+
+  return { success: false, error: notFoundMsg };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -430,7 +464,22 @@ export async function lookupPlayerNickname(
   playerId: string,
   playerZoneId?: string
 ): Promise<LookupResult> {
-  const trimmedId = playerId.trim();
+  let trimmedId = (playerId || '').trim();
+  let trimmedZone = (playerZoneId || '').trim();
+
+  // Intelligent combined ID/Zone parsing (e.g. "1523754961 (11766)", "1523754961(11766)", "1523754961 11766", "1523754961_11766")
+  const comboMatch = trimmedId.match(/^(\d{4,12})[\s_()\-]+(\d{3,6})\)?$/);
+  if (comboMatch) {
+    trimmedId = comboMatch[1];
+    if (!trimmedZone) {
+      trimmedZone = comboMatch[2];
+    }
+  }
+
+  // Strip parentheses and whitespace from Zone ID
+  if (trimmedZone) {
+    trimmedZone = trimmedZone.replace(/[()]/g, '').trim();
+  }
 
   if (!trimmedId) {
     return { success: false, error: 'Player ID is required' };
@@ -440,72 +489,119 @@ export async function lookupPlayerNickname(
     ? 'free-fire' 
     : ((gameSlug.includes('mobile-legend') || gameSlug.includes('mlbb') || gameSlug.includes('moonton')) ? 'mobile-legends' : gameSlug);
 
+  // Strip non-numeric chars for Mobile Legends
+  if (baseSlug === 'mobile-legends') {
+    trimmedId = trimmedId.replace(/[^\d]/g, '');
+    trimmedZone = trimmedZone.replace(/[^\d]/g, '');
+  }
+
   // Pre-check: If this ID is a pre-seeded mock sandbox account, resolve it immediately.
   if (baseSlug === 'mobile-legends') {
-    const key = `${trimmedId}|${playerZoneId ? playerZoneId.trim() : ''}`;
+    const key = `${trimmedId}|${trimmedZone}`;
     const known = SANDBOX_ACCOUNTS['mobile-legends']?.[key] || 
                   SANDBOX_ACCOUNTS['mobile-legend']?.[key] ||
                   SANDBOX_ACCOUNTS['moonton-mlbb']?.[key];
-    if (known) return { success: true, nickname: known };
+    if (known) {
+      return { 
+        success: true, 
+        nickname: known,
+        region: 'Cambodia (Asia)',
+        level: 45,
+        playerId: trimmedId,
+        playerZoneId: trimmedZone,
+        avatarUrl: '/images/games/mlbb.png'
+      };
+    }
   } else if (SANDBOX_ACCOUNTS[baseSlug]?.[trimmedId]) {
     return { success: true, nickname: SANDBOX_ACCOUNTS[baseSlug][trimmedId] };
   }
 
   // ── Mobile Legends Real In-Game Name Multi-Provider Pipeline ──────────────
   if (baseSlug === 'mobile-legends') {
-    if (!playerZoneId || !playerZoneId.trim()) {
-      return { success: false, error: 'Zone ID is required for Mobile Legends' };
+    if (!trimmedZone) {
+      return { success: false, error: 'សូមបញ្ចូល Zone ID (Server ID) សម្រាប់ Mobile Legends' };
     }
 
-    // 1. Try mrxtopup (Cambodian direct Moonton gateway)
-    const mrxResult = await mrxApiLookup(gameSlug, trimmedId, playerZoneId);
-    if (mrxResult && mrxResult.success && mrxResult.nickname) {
-      console.log(`[MLBB Real Name] ✅ Found via mrxtopup: ${mrxResult.nickname}`);
-      return mrxResult;
-    }
-
-    // 2. Try VNGZZ2GAME Official Partner API
-    const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId, playerZoneId);
+    // 1. Try VNGZZ2GAME Official Partner API FIRST (Fast & Direct Moonton Gateway)
+    const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId, trimmedZone);
     if (vngzzResult && vngzzResult.success && vngzzResult.nickname) {
       console.log(`[MLBB Real Name] ✅ Found via VNGZZ: ${vngzzResult.nickname}`);
       return vngzzResult;
     }
 
-    // 3. Try Vercel / Gateway API
-    const vercelResult = await liveApiLookup('mobile_legends', trimmedId, playerZoneId);
+    // 2. Try Vercel / Gateway API
+    const vercelResult = await liveApiLookup('mobile_legends', trimmedId, trimmedZone);
     if (vercelResult && vercelResult.success && vercelResult.nickname) {
       console.log(`[MLBB Real Name] ✅ Found via Vercel Gateway: ${vercelResult.nickname}`);
-      return vercelResult;
-    }
-
-    // Explicit error from live providers if user does not exist
-    if (mrxResult && !mrxResult.success && mrxResult.error) {
-      return mrxResult;
-    }
-    if (vngzzResult && !vngzzResult.success && vngzzResult.error) {
       return {
-        success: false,
-        error: 'រកមិនឃើញឈ្មោះគណនី Mobile Legends នេះទេ។ សូមពិនិត្យមើល User ID និង Zone ID ម្ដងទៀត (Mobile Legends User ID or Zone ID not found).'
+        ...vercelResult,
+        region: vercelResult.region || 'Cambodia (Asia)',
+        playerId: trimmedId,
+        playerZoneId: trimmedZone,
+        avatarUrl: '/images/games/mlbb.png'
       };
     }
 
+    // 3. Try mrxtopup (Cambodian gateway fallback)
+    const mrxResult = await mrxApiLookup(gameSlug, trimmedId, trimmedZone);
+    if (mrxResult && mrxResult.success && mrxResult.nickname) {
+      console.log(`[MLBB Real Name] ✅ Found via mrxtopup: ${mrxResult.nickname}`);
+      return {
+        ...mrxResult,
+        region: 'Cambodia (Asia)',
+        playerId: trimmedId,
+        playerZoneId: trimmedZone,
+        avatarUrl: '/images/games/mlbb.png'
+      };
+    }
+
+    // If VNGZZ explicitly returned user not found
+    if (vngzzResult && !vngzzResult.success && vngzzResult.error) {
+      return vngzzResult;
+    }
+
     console.log(`[Game Provider API] Live APIs unavailable for ${gameSlug}. Using sandbox resolver.`);
-    return sandboxLookup(gameSlug, trimmedId, playerZoneId);
+    return sandboxLookup(gameSlug, trimmedId, trimmedZone);
+  }
+
+  // ── Free Fire Real In-Game Name Verification Pipeline ─────────────────────
+  if (baseSlug === 'free-fire') {
+    // 1. Try VNGZZ2GAME Official Partner API (Tries freefire_sgmy then freefire_global)
+    const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId);
+    if (vngzzResult && vngzzResult.success && vngzzResult.nickname) {
+      console.log(`[Free Fire Real Name] ✅ Found via VNGZZ: ${vngzzResult.nickname}`);
+      return {
+        ...vngzzResult,
+        avatarUrl: '/images/games/freefire.png',
+        region: 'Cambodia (Asia)'
+      };
+    }
+
+    // 2. Try mrxtopup fallback
+    const mrxResult = await mrxApiLookup(gameSlug, trimmedId);
+    if (mrxResult && mrxResult.success && mrxResult.nickname) {
+      console.log(`[Free Fire Real Name] ✅ Found via mrxtopup: ${mrxResult.nickname}`);
+      return {
+        ...mrxResult,
+        region: 'Cambodia (Asia)',
+        playerId: trimmedId,
+        avatarUrl: '/images/games/freefire.png'
+      };
+    }
+
+    // If VNGZZ explicitly returned user not found
+    if (vngzzResult && !vngzzResult.success && vngzzResult.error) {
+      return vngzzResult;
+    }
+
+    console.log(`[Game Provider API] Live APIs unavailable for ${gameSlug}. Using sandbox resolver.`);
+    return sandboxLookup(gameSlug, trimmedId);
   }
 
   // ── 0. VNGZZ2GAME Official API Lookup for other games ─────────────────────
   const vngzzResult = await vngzz2gameLookup(gameSlug, trimmedId, playerZoneId);
   if (vngzzResult !== null) {
     return vngzzResult;
-  }
-
-  // ── 1. Free Fire live API lookup ──────────────────────────────────────────
-  if (baseSlug === 'free-fire') {
-    const liveResult = await mrxApiLookup(gameSlug, trimmedId, playerZoneId);
-    if (liveResult !== null) {
-      return liveResult;
-    }
-    return sandboxLookup(gameSlug, trimmedId, playerZoneId);
   }
 
   // ── 2. Roblox: use official Roblox API ──────────────────────────────────
