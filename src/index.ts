@@ -242,9 +242,10 @@ const authLimiter = rateLimit({
 
 const ordersLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 50, // max 50 orders per 15 mins per IP
+  max: 200, // accommodate busy shared carrier IPs
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1',
   message: { error: 'Order creation rate limit exceeded. Please wait a few minutes before trying again.' },
 });
 

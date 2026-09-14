@@ -215,18 +215,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     let paymentMd5: string | null = null;
     const baseUrl = `${req.protocol}://${req.get('host')}`;
 
-    if (resolvedMethod === 'ABA') {
-      const abaMerchantId = process.env.ABA_PAYWAY_MERCHANT_ID || 'MOCK_MERCHANT';
-      const abaApiKey = process.env.ABA_PAYWAY_API_KEY || 'MOCK_KEY';
-      paymentDetails = generateABAMockPayment(
-        paymentTxnId,
-        pkg.price,
-        `${pkg.product.name} - ${pkg.name}`,
-        abaMerchantId,
-        abaApiKey,
-        baseUrl
-      );
-    } else if (resolvedMethod === 'CANADIA') {
+    if (resolvedMethod === 'CANADIA') {
       const qrData = `00020101021230480012canadia_topup0110topup@cnb5204599953038405404${pkg.price.toFixed(2)}5802KH5919CANADIA BANK PLC.6008Phnom Penh62180710${paymentTxnId}6304E5F6`;
       const md5 = require('crypto').createHash('md5').update(qrData).digest('hex');
       paymentQrCode = qrData;
@@ -239,18 +228,38 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         logo: '/images/payments/canadia.png'
       };
     } else {
-      const bakongQr = await generateBakongKHQR(
+      // ABA KHQR & Bakong KHQR (Standard Cambodian Banking QR scannable by ABA Mobile)
+      const khqr = await generateBakongKHQR(
         paymentTxnId,
         pkg.price,
         `${pkg.product.name} - ${pkg.name}`
       );
-      paymentQrCode = bakongQr.qrCode;
-      paymentMd5 = bakongQr.md5;
-      // Use the khpay transaction_id (bk_...) if returned, else keep local ID
-      if (bakongQr.txnId && bakongQr.txnId !== paymentTxnId) {
-        paymentTxnId = bakongQr.txnId;
+      paymentQrCode = khqr.qrCode;
+      paymentMd5 = khqr.md5;
+      if (khqr.txnId && khqr.txnId !== paymentTxnId) {
+        paymentTxnId = khqr.txnId;
       }
-      paymentDetails = bakongQr;
+
+      if (resolvedMethod === 'ABA') {
+        const abaMerchantId = process.env.ABA_PAYWAY_MERCHANT_ID || 'MOCK_MERCHANT';
+        const abaApiKey = process.env.ABA_PAYWAY_API_KEY || 'MOCK_KEY';
+        const abaMock = generateABAMockPayment(
+          paymentTxnId,
+          pkg.price,
+          `${pkg.product.name} - ${pkg.name}`,
+          abaMerchantId,
+          abaApiKey,
+          baseUrl
+        );
+        paymentDetails = {
+          ...khqr,
+          bankName: 'ABA Bank',
+          payload: abaMock.payload,
+          checkoutUrl: abaMock.checkoutUrl,
+        };
+      } else {
+        paymentDetails = khqr;
+      }
     }
 
     // Create Order in Database

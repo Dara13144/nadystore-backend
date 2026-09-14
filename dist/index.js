@@ -222,9 +222,10 @@ const authLimiter = (0, express_rate_limit_1.default)({
 });
 const ordersLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
-    max: 50, // max 50 orders per 15 mins per IP
+    max: 200, // accommodate busy shared carrier IPs
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1',
     message: { error: 'Order creation rate limit exceeded. Please wait a few minutes before trying again.' },
 });
 const paymentLimiter = (0, express_rate_limit_1.default)({
