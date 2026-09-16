@@ -7,6 +7,7 @@ exports.ADMIN_EMAILS = void 0;
 exports.extractToken = extractToken;
 exports.authenticateJWT = authenticateJWT;
 exports.requireAdmin = requireAdmin;
+exports.requireOwnership = requireOwnership;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const prisma_1 = __importDefault(require("../prisma"));
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
@@ -55,7 +56,7 @@ function extractToken(req) {
             return decodeURIComponent(match[1]).trim();
         }
     }
-    // 4. Query param
+    // 4. Query param (only for development; avoid in production)
     if (req.query && typeof req.query.token === 'string' && req.query.token.trim() && req.query.token !== 'null') {
         return req.query.token.trim();
     }
@@ -128,9 +129,73 @@ function requireAdmin(req, res, next) {
     const email = (req.user?.email || '').trim().toLowerCase();
     const isAdminEmail = exports.ADMIN_EMAILS.includes(email);
     if (!req.user || (!isAdminEmail && req.user.role !== 'ADMIN')) {
+        // ✅ OWASP A01: Log permission denied for admin routes
+        console.warn(`[SECURITY] [WARN] [${new Date().toISOString()}] PERMISSION_DENIED ${JSON.stringify({
+            userId: req.user?.id || 'unauthenticated',
+            email: req.user?.email || 'unknown',
+            resource: 'admin',
+            action: `${req.method} ${req.originalUrl}`,
+            ip: req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
+        })}`);
         return res.status(403).json({ error: 'Forbidden: Admin access required' });
     }
     // Ensure role is explicitly set to ADMIN
     req.user.role = 'ADMIN';
     next();
+}
+// ─── OWASP A01: Broken Access Control — requireOwnership Middleware ───────────
+/**
+ * Middleware factory that verifies the authenticated user owns the requested resource
+ * (or is an admin). Fetches the resource from DB and attaches it to req.resource.
+ *
+ * Usage: app.get('/api/orders/:id', authenticateJWT, requireOwnership('order'), handler)
+ *
+ * The resource model MUST have a `userId` field linking it to a user.
+ *
+ * @param resourceType - Prisma model name (e.g., 'order', 'user')
+ * @param idParam      - Route param name for the resource ID (default: 'id')
+ */
+function requireOwnership(resourceType, idParam = 'id') {
+    return async (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        const resourceId = req.params[idParam];
+        if (!resourceId) {
+            return res.status(400).json({ error: `Missing resource ID param: ${idParam}` });
+        }
+        try {
+            // Dynamically access Prisma model
+            const model = prisma_1.default[resourceType];
+            if (!model || typeof model.findUnique !== 'function') {
+                console.error(`[requireOwnership] Unknown Prisma model: ${resourceType}`);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+            const resource = await model.findUnique({ where: { id: resourceId } });
+            if (!resource) {
+                return res.status(404).json({ error: 'Resource not found' });
+            }
+            // ✅ OWASP A01: Check ownership — user must own the resource OR be an admin
+            const isOwner = resource.userId === req.user.id;
+            const isAdmin = req.user.role === 'ADMIN' || exports.ADMIN_EMAILS.includes(req.user.email);
+            if (!isOwner && !isAdmin) {
+                console.warn(`[SECURITY] [WARN] [${new Date().toISOString()}] PERMISSION_DENIED ${JSON.stringify({
+                    userId: req.user.id,
+                    email: req.user.email,
+                    resource: resourceType,
+                    resourceId,
+                    action: `${req.method} ${req.originalUrl}`,
+                    ip: req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
+                })}`);
+                return res.status(403).json({ error: 'Access denied: You do not own this resource' });
+            }
+            // Attach resource to request for use in the route handler
+            req.resource = resource;
+            next();
+        }
+        catch (err) {
+            console.error(`[requireOwnership] Error fetching ${resourceType}:`, err);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+    };
 }

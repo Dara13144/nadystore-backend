@@ -11,13 +11,21 @@ dotenv.config();
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
-  'https://ueziueclbgymbynuxpby.supabase.co';
+  'https://fnekziuyloncrsgqxcbq.supabase.co';
+
+export const SUPABASE_AUTH_ENDPOINTS = {
+  callbackUrl: 'https://fnekziuyloncrsgqxcbq.supabase.co/auth/v1/callback',
+  authorizeUrl: 'https://fnekziuyloncrsgqxcbq.supabase.co/auth/v1/oauth/authorize',
+  tokenUrl: 'https://fnekziuyloncrsgqxcbq.supabase.co/auth/v1/oauth/token',
+  jwksUrl: 'https://fnekziuyloncrsgqxcbq.supabase.co/auth/v1/.well-known/jwks.json',
+  openidConfigUrl: 'https://fnekziuyloncrsgqxcbq.supabase.co/auth/v1/.well-known/openid-configuration',
+};
 
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_ANON_KEY ||
-  'sb_publishable_jIdjx8vma3dtMGCMwlizMA__G9TpoAi';
+  'sb_publishable_5xDaVmE6nmGlqlHJZvuZAw_uoLjR64-';
 
 let supabaseAdminInstance: SupabaseClient | null = null;
 

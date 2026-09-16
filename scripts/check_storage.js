@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const url = process.env.SUPABASE_URL || 'https://ueziueclbgymbynuxpby.supabase.co';
+const url = process.env.SUPABASE_URL || 'https://fnekziuyloncrsgqxcbq.supabase.co';
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
 const client = createClient(url, key);
 

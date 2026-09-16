@@ -36,7 +36,7 @@ const FF_PACKAGES = [
   { name: 'Monthly Membership x3', amount: 3, price: 23.67, category: 'ប្រចាំខែ' },
   { name: 'Monthly Membership x4', amount: 4, price: 31.56, category: 'ប្រចាំខែ' },
   { name: 'Monthly Membership x5', amount: 5, price: 39.45, category: 'ប្រចាំខែ' },
-  { name: 'Monthly Membership x10', amount: 10, price: 78.90, category: 'ប្រចាំខែ' },
+  { name: 'Monthly Membership x6', amount: 6, price: 47.34, category: 'ប្រចាំខែ' },
 ];
 
 async function main() {

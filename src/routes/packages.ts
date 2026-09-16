@@ -42,7 +42,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, amount, price, category, badge, isActive, image, productId } = req.body;
+    const { name, amount, price, category, badge, isActive, image, productId, productCode } = req.body;
 
     // 1. Try exact ID lookup
     let existingPackage = await prisma.package.findUnique({
@@ -97,6 +97,7 @@ router.patch('/:id', authenticateJWT, requireAdmin, async (req: AuthenticatedReq
     if (badge !== undefined) data.badge = badge;
     if (isActive !== undefined) data.isActive = isActive;
     if (image !== undefined) data.image = image;
+    if (productCode !== undefined) data.productCode = productCode || null;
 
     let resultPackage;
     if (existingPackage) {

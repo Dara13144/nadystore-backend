@@ -72,6 +72,38 @@ router.post('/lookup/:gameSlug', handlePlayerLookup);
 router.get('/:slug/check-name', handlePlayerLookup);
 router.post('/:slug/check-name', handlePlayerLookup);
 router.post('/check-player', handlePlayerLookup);
+// In-memory cache for Stock 2 categories
+let stock2CategoriesCache = [];
+let stock2CategoriesCacheTime = 0;
+// 2b. Get all Game Stock 2 categories (Public)
+router.get(['/stock2/categories', '/game2/categories'], async (_req, res) => {
+    const now = Date.now();
+    if (stock2CategoriesCache.length > 0 && now - stock2CategoriesCacheTime < 5 * 60 * 1000) {
+        return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+    }
+    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+    try {
+        const upstreamRes = await fetch('https://www.vngzz2game.site/api/v1/game2/categories', {
+            headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(8000),
+        });
+        if (upstreamRes.ok) {
+            const data = await upstreamRes.json();
+            if (data && data.categories && Array.isArray(data.categories)) {
+                stock2CategoriesCache = data.categories;
+                stock2CategoriesCacheTime = now;
+                return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+            }
+        }
+    }
+    catch (err) {
+        console.warn('[Products] Stock 2 categories error:', err.message);
+    }
+    if (stock2CategoriesCache.length > 0) {
+        return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+    }
+    return res.status(503).json({ success: false, error: 'Failed to fetch Game Stock 2 categories' });
+});
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req, res) => {
     try {
@@ -80,12 +112,14 @@ router.get('/:slug', async (req, res) => {
         res.set('Expires', '0');
         const rawSlug = decodeURIComponent(req.params.slug).trim();
         const slug = rawSlug.toLowerCase();
-        const product = await prisma_1.default.product.findFirst({
+        let product = await prisma_1.default.product.findFirst({
             where: {
                 OR: [
                     { slug: slug },
                     { slug: rawSlug },
                     { id: rawSlug },
+                    ...(slug === 'telegram' ? [{ slug: 'telegram-premium' }] : []),
+                    ...(slug === 'telegram-premium' ? [{ slug: 'telegram' }] : []),
                 ],
                 isActive: true,
             },
@@ -96,6 +130,51 @@ router.get('/:slug', async (req, res) => {
                 },
             },
         });
+        if (!product) {
+            // Check if it is a Stock 2 game!
+            const cleanCode = slug.replace(/^(stock2-|game2-)/i, '').trim();
+            const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+            try {
+                const stock2Res = await fetch(`https://www.vngzz2game.site/api/v1/game2/products?game_code=${encodeURIComponent(cleanCode)}`, {
+                    headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                    signal: AbortSignal.timeout(7000),
+                });
+                if (stock2Res.ok) {
+                    const s2Data = await stock2Res.json();
+                    if (s2Data && s2Data.status === 'SUCCESS' && s2Data.game) {
+                        const game = s2Data.game;
+                        const pkgs = (s2Data.products || s2Data.data || []).map((p) => ({
+                            id: `pkg-${p.code || p.product_code}`,
+                            name: p.name,
+                            price: Number(p.sell_price || p.price || p.base_price || 0),
+                            originalPrice: Number(p.cost_price || p.base_price || p.price),
+                            productCode: p.product_code || p.code,
+                            description: `Game Stock 2 · Instant Delivery`,
+                            isActive: true,
+                            productId: `stock2-${game.game_code || cleanCode}`,
+                        }));
+                        return res.status(200).json({
+                            id: `stock2-${game.game_code || cleanCode}`,
+                            name: game.name,
+                            slug: `stock2-${game.game_code || cleanCode}`,
+                            category: 'MOBILE_GAME',
+                            description: game.description || 'Game Stock 2 Instant Delivery',
+                            imageUrl: game.image_url || '/images/games/default.png',
+                            bannerUrl: game.image_url || null,
+                            isActive: true,
+                            packages: pkgs,
+                            fields: game.fields || ['User ID'],
+                            inputs: game.inputs || [],
+                            need_server: !!game.need_server,
+                            stock: 'Stock 2',
+                        });
+                    }
+                }
+            }
+            catch (s2Err) {
+                console.warn('[Products] Stock 2 lookup warning:', s2Err?.message);
+            }
+        }
         if (!product) {
             return res.status(404).json({ error: 'Product not found' });
         }

@@ -123,32 +123,43 @@ async function verifyAbaKhqrPayment(order) {
  * allocates stock vouchers if the product is a code voucher category, else
  * auto-fulfills direct top-ups via VNGZZ2GAME API. Sends Telegram alert notifications.
  */
-async function processVerifiedPayment(order, gatewayRef) {
-    const txnId = order.paymentTxnId;
+async function processVerifiedPayment(order, gatewayRef, options) {
+    // Always query fresh order with package and product included
+    const freshOrder = await prisma_1.default.order.findUnique({
+        where: { id: order.id },
+        include: { package: { include: { product: true } } },
+    });
+    const activeOrder = freshOrder || order;
+    const txnId = activeOrder.paymentTxnId;
     log('Delivery', txnId, `Initiating delivery workflow. GatewayRef: "${gatewayRef}"`);
-    // Guard: idempotency
-    const freshCheck = await prisma_1.default.order.findUnique({ where: { id: order.id } });
-    if (freshCheck?.paymentStatus === 'PAID' || freshCheck?.paymentStatus === 'SUCCESS') {
-        log('Delivery', txnId, 'Order already PAID or SUCCESS -- skipping duplicate processing.');
+    // Guard: idempotency - check if already delivered and payment confirmed
+    if (!options?.forceFulfill && activeOrder.deliveryStatus === 'DELIVERED' && (activeOrder.paymentStatus === 'PAID' || activeOrder.paymentStatus === 'SUCCESS')) {
+        log('Delivery', txnId, 'Order already DELIVERED and PAID -- skipping duplicate processing.');
         return {
-            deliverySuccess: freshCheck.status === 'SUCCESS' || freshCheck.status === 'PAID',
-            deliveredCode: freshCheck.stockDeliveredCode,
-            currentOrder: freshCheck,
+            deliverySuccess: true,
+            deliveredCode: activeOrder.stockDeliveredCode,
+            currentOrder: activeOrder,
         };
     }
     // If direct top-up, trigger auto provider delivery to VNGZZ2GAME
     let providerRef = gatewayRef;
-    const isVoucher = order.package?.category === 'CODE_VOUCHER';
+    const isVoucher = activeOrder.package?.category === 'CODE_VOUCHER';
+    let deliveryResult = null;
     if (!isVoucher) {
         try {
-            const gameSlug = order.package?.product?.slug || '';
-            const deliveryRes = await (0, gameProviderMock_1.deliverTopup)(gameSlug, order.playerId, order.playerZoneId || null, order.package?.name || '', order.price, txnId, order.package?.productCode);
-            if (deliveryRes.referenceId) {
-                providerRef = deliveryRes.referenceId;
+            const gameSlug = activeOrder.package?.product?.slug || '';
+            deliveryResult = await (0, gameProviderMock_1.deliverTopup)(gameSlug, activeOrder.playerId, activeOrder.playerZoneId || null, activeOrder.package?.name || '', activeOrder.price, txnId, activeOrder.package?.productCode, activeOrder.package?.amount);
+            if (deliveryResult && deliveryResult.referenceId) {
+                providerRef = deliveryResult.referenceId;
             }
         }
         catch (deliveryErr) {
             logErr('Delivery', txnId, `Provider delivery error: ${deliveryErr.message || deliveryErr}`);
+            deliveryResult = {
+                success: false,
+                referenceId: providerRef,
+                error: deliveryErr.message || 'Provider recharge exception',
+            };
         }
     }
     // Execute database updates and stock claiming atomically
@@ -157,7 +168,7 @@ async function processVerifiedPayment(order, gatewayRef) {
         if (isVoucher) {
             // Find an unused stock item for this package
             const stockItem = await tx.stock.findFirst({
-                where: { packageId: order.packageId, isUsed: false },
+                where: { packageId: activeOrder.packageId, isUsed: false },
                 orderBy: { createdAt: 'asc' },
             });
             if (stockItem) {
@@ -165,25 +176,25 @@ async function processVerifiedPayment(order, gatewayRef) {
                 // Mark stock as used
                 await tx.stock.update({
                     where: { id: stockItem.id },
-                    data: { isUsed: true, orderId: order.id },
+                    data: { isUsed: true, orderId: activeOrder.id },
                 });
                 log('Delivery', txnId, `Claimed stock code: "${stockCode}"`);
             }
             else {
-                logErr('Delivery', txnId, `OUT OF STOCK for package ${order.packageId}`);
+                logErr('Delivery', txnId, `OUT OF STOCK for package ${activeOrder.packageId}`);
             }
         }
         const deliveryStatus = isVoucher
             ? (stockCode ? 'DELIVERED' : 'FAILED')
-            : 'DELIVERED'; // Direct top-ups are fulfilled via provider
-        const finalStatus = deliveryStatus === 'DELIVERED' ? 'PAID' : 'FAILED';
+            : (deliveryResult?.success ? 'DELIVERED' : (deliveryResult ? 'FAILED' : 'DELIVERED'));
+        const finalStatus = 'COMPLETED'; // Gateway payment and delivery confirmed
         const updated = await tx.order.update({
-            where: { id: order.id },
+            where: { id: activeOrder.id },
             data: {
                 paymentStatus: 'SUCCESS',
                 status: finalStatus,
                 deliveryStatus: deliveryStatus,
-                paidAt: new Date(),
+                paidAt: activeOrder.paidAt || new Date(),
                 gatewayRef: providerRef,
                 stockDeliveredCode: stockCode,
             },
@@ -198,7 +209,7 @@ async function processVerifiedPayment(order, gatewayRef) {
         const deliveryDetail = result.stockCode
             ? `🎫 <b>Voucher Code:</b> <code>${result.stockCode}</code>`
             : `📲 <b>Top-Up Delivery:</b> ${result.deliveryStatus}`;
-        const productSlug = result.updated.package?.product?.slug || order.package?.product?.slug || '';
+        const productSlug = result.updated.package?.product?.slug || activeOrder.package?.product?.slug || '';
         const isMLBB = productSlug.includes('mobile-legend') || productSlug.includes('mlbb') || productSlug.includes('moonton');
         const isFreeFire = productSlug.includes('free-fire');
         const isValorant = productSlug.includes('valorant');
@@ -206,35 +217,49 @@ async function processVerifiedPayment(order, gatewayRef) {
         const isHoK = productSlug.includes('honor-of-kings');
         const isFarlight = productSlug.includes('farlight');
         const isDeltaForce = productSlug.includes('delta-force');
-        let credentialsLabel = `<b>Player ID:</b> <code>${order.playerId}</code>`;
+        let credentialsLabel = `<b>Player ID:</b> <code>${activeOrder.playerId}</code>`;
         if (isMLBB) {
-            credentialsLabel = `<b>Mobile Legends ID:</b> <code>${order.playerId}</code>\n<b>Server ID:</b> <code>${order.playerZoneId || 'N/A'}</code>`;
+            credentialsLabel = `<b>Mobile Legends ID:</b> <code>${activeOrder.playerId}</code>\n<b>Server ID:</b> <code>${activeOrder.playerZoneId || 'N/A'}</code>`;
         }
         else if (isFreeFire) {
-            credentialsLabel = `<b>Free Fire ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Free Fire ID:</b> <code>${activeOrder.playerId}</code>`;
         }
         else if (isValorant) {
-            credentialsLabel = `<b>Valorant ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Valorant ID:</b> <code>${activeOrder.playerId}</code>`;
         }
         else if (isBloodStrike) {
-            credentialsLabel = `<b>Blood Strike ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Blood Strike ID:</b> <code>${activeOrder.playerId}</code>`;
         }
         else if (isHoK) {
-            credentialsLabel = `<b>Honor of Kings ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Honor of Kings ID:</b> <code>${activeOrder.playerId}</code>`;
         }
         else if (isFarlight) {
-            credentialsLabel = `<b>Farlight 84 ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Farlight 84 ID:</b> <code>${activeOrder.playerId}</code>`;
         }
         else if (isDeltaForce) {
-            credentialsLabel = `<b>Delta Force ID:</b> <code>${order.playerId}</code>`;
+            credentialsLabel = `<b>Delta Force ID:</b> <code>${activeOrder.playerId}</code>`;
         }
-        else if (order.playerZoneId) {
-            credentialsLabel = `<b>Player ID:</b> <code>${order.playerId}</code>\n<b>Server/Zone ID:</b> <code>${order.playerZoneId}</code>`;
+        else if (activeOrder.playerZoneId) {
+            credentialsLabel = `<b>Player ID:</b> <code>${activeOrder.playerId}</code>\n<b>Server/Zone ID:</b> <code>${activeOrder.playerZoneId}</code>`;
         }
-        const packageName = result.updated.package?.name || order.package?.name || '';
-        const playerIdFull = order.playerZoneId ? `${order.playerId} (${order.playerZoneId})` : order.playerId;
+        const packageName = result.updated.package?.name || activeOrder.package?.name || '';
+        const playerIdFull = activeOrder.playerZoneId ? `${activeOrder.playerId} (${activeOrder.playerZoneId})` : activeOrder.playerId;
         await (0, telegram_1.sendTelegramNotification)(`${playerIdFull} ${packageName}`.trim());
         log('Telegram', txnId, 'Successfully dispatched Telegram notification alert.');
+        // If delivery failed (e.g. low balance on upstream provider API), send alert to admin
+        if (result.deliveryStatus === 'FAILED' && !isVoucher) {
+            const failReason = deliveryResult?.error || 'Provider balance or service error';
+            await (0, telegram_1.sendTelegramNotification)(`⚠️ <b>Top-Up Delivery Pending / Action Required</b>\n` +
+                `-----------------------------------------\n` +
+                `<b>Txn ID:</b> <code>${txnId}</code>\n` +
+                `<b>Game:</b> ${activeOrder.package?.product?.name || 'Game'}\n` +
+                `<b>Player:</b> <code>${activeOrder.playerId}</code>${activeOrder.playerZoneId ? ` (Zone: <code>${activeOrder.playerZoneId}</code>)` : ''}\n` +
+                `<b>Nickname:</b> ${activeOrder.playerNickname || 'N/A'}\n` +
+                `<b>Package:</b> ${packageName}\n` +
+                `<b>Price Paid:</b> $${activeOrder.price.toFixed(2)}\n` +
+                `<b>Provider Note:</b> ${failReason}\n` +
+                `👉 <i>Customer has paid. Please fund provider balance at vngzz2game.site and click Auto-Fulfill in Admin.</i>`).catch(() => { });
+        }
     }
     catch (tgErr) {
         logErr('Telegram', txnId, `Failed to dispatch Telegram alert: ${tgErr.message}`);

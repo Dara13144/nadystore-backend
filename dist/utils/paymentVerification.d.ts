@@ -16,30 +16,12 @@ export declare function verifyAbaKhqrPayment(order: any): Promise<boolean>;
  * allocates stock vouchers if the product is a code voucher category, else
  * auto-fulfills direct top-ups via VNGZZ2GAME API. Sends Telegram alert notifications.
  */
-export declare function processVerifiedPayment(order: any, gatewayRef: string): Promise<{
+export declare function processVerifiedPayment(order: any, gatewayRef: string, options?: {
+    forceFulfill?: boolean;
+}): Promise<{
     deliverySuccess: boolean;
-    deliveredCode: string | null;
-    currentOrder: {
-        id: string;
-        createdAt: Date;
-        updatedAt: Date;
-        playerId: string;
-        playerZoneId: string | null;
-        price: number;
-        packageId: string;
-        userId: string | null;
-        playerNickname: string | null;
-        status: string;
-        paymentMethod: string;
-        paymentStatus: string;
-        paymentTxnId: string;
-        gatewayRef: string | null;
-        paymentQrCode: string | null;
-        paymentMd5: string | null;
-        paidAt: Date | null;
-        deliveryStatus: string;
-        stockDeliveredCode: string | null;
-    };
+    deliveredCode: any;
+    currentOrder: any;
 }>;
 /**
  * expireOldOrders

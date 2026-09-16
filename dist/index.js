@@ -66,15 +66,31 @@ app.use((req, res, next) => {
     });
     next();
 });
-// ─── 4. Security Middleware (Helmet) ──────────────────────────────────────────
+// ─── 4. Security Middleware (Helmet + Headers) ────────────────────────────────
+// Protect API headers without breaking local development with upgrade-insecure-requests
 app.use((0, helmet_1.default)({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     contentSecurityPolicy: false,
+    hsts: process.env.NODE_ENV === 'production' ? {
+        maxAge: 31536000, // 1 year
+        includeSubDomains: true,
+        preload: true,
+    } : false,
     xContentTypeOptions: true,
     xFrameOptions: { action: 'sameorigin' },
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
     xXssProtection: true,
 }));
+// ─── HTTPS Redirect (Production only) ─────────────────────────────────────────
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        const proto = req.header('x-forwarded-proto');
+        if (proto && proto !== 'https') {
+            return res.redirect(301, `https://${req.header('host')}${req.url}`);
+        }
+        next();
+    });
+}
 // ─── 5. Robust CORS Configuration ─────────────────────────────────────────────
 const allowedOrigins = [
     'http://localhost:3000',
@@ -91,6 +107,7 @@ const allowedOrigins = [
     process.env.FRONTEND_URL,
     process.env.NEXT_PUBLIC_APP_URL,
 ].filter(Boolean);
+const isProduction = process.env.NODE_ENV === 'production';
 const corsOptions = {
     origin: (origin, callback) => {
         // Allow non-browser callers (mobile apps, curl, server-to-server, webhooks)
@@ -108,7 +125,12 @@ const corsOptions = {
         if (isExplicitlyAllowed) {
             return callback(null, true);
         }
-        // Allow the request to prevent browser "Failed to fetch" on custom domains/previews
+        // OWASP A05: In production, reject unknown origins. In dev/staging, allow all.
+        if (isProduction) {
+            console.warn(`[CORS] Rejected unknown origin: ${origin}`);
+            return callback(new Error(`CORS policy: origin not allowed — ${origin}`));
+        }
+        // Non-production: allow all (for previews, staging, etc.)
         return callback(null, true);
     },
     credentials: true,
@@ -267,6 +289,320 @@ app.use('/api/payments/webhook', webhook_1.default);
 app.use('/api/payment/webhook', webhook_1.default);
 app.use('/webhooks/cutluy', webhook_1.default);
 app.use('/api/webhooks/cutluy', webhook_1.default);
+// ─── VNGZZ2GAME Provider Routes (/api/v1/game/*, /api/v1/game2/*, /api/v2/game/*, /api/provider/*) ──
+const gameProviderMock_1 = require("./utils/gameProviderMock");
+const getStockBases = (reqPath) => {
+    if (reqPath.includes('game2')) {
+        return [
+            'https://www.vngzz2game.site/api/v1/game2',
+            'https://www.vngzz2game.site/api/v1/game',
+        ];
+    }
+    // For /api/v2/game or /api/v1/game, map to v1/game then v1/game2, with v2 env fallback
+    return [
+        'https://www.vngzz2game.site/api/v1/game',
+        'https://www.vngzz2game.site/api/v1/game2',
+        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
+    ];
+};
+const getApiKey = (req) => {
+    return (req.headers['x-api-key'] ||
+        req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
+        process.env.VNGZZ2GAME_API_KEY ||
+        'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ');
+};
+// 0. Root Gateway Info (/api/v2/game, /api/v1/game, /api/v1/game2, /api/provider)
+app.get(['/api/v2/game', '/api/v1/game', '/api/v1/game2', '/api/provider'], generalApiLimiter, async (req, res) => {
+    const version = req.path.includes('v2') ? 'v2' : 'v1';
+    const sub = req.path.includes('game2') ? 'game2' : 'game';
+    return res.json({
+        status: 'SUCCESS',
+        gateway: `VngZz 2 Game API Gateway (${version.toUpperCase()})`,
+        provider: 'https://www.vngzz2game.site',
+        endpoints: {
+            profile: `/api/${version}/${sub}/profile`,
+            check_id: `/api/${version}/${sub}/check_id`,
+            categories: `/api/${version}/${sub}/categories`,
+            products: `/api/${version}/${sub}/products`,
+            create_order: `/api/${version}/${sub}/create_order`,
+            check_order: `/api/${version}/${sub}/check_order`,
+            deposit: `/api/${version}/${sub}/deposit`,
+        },
+    });
+});
+// 1. Profile (Check reseller balance & statistics)
+app.get(['/api/v1/game/profile', '/api/v1/game2/profile', '/api/v2/game/profile', '/api/provider/profile'], generalApiLimiter, async (req, res) => {
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    for (const base of bases) {
+        try {
+            const upRes = await fetch(`${base}/profile`, {
+                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(6000),
+            });
+            if (upRes.ok) {
+                const data = await upRes.json();
+                if (data && data.status !== 404 && data.code !== 'NOT_FOUND') {
+                    return res.json(data);
+                }
+            }
+        }
+        catch (e) {
+            console.warn('[Profile] Upstream direct error on', base, e.message);
+        }
+    }
+    try {
+        const data = await (0, gameProviderMock_1.fetchProviderProfile)();
+        return res.status(data.status === 'FAILED' ? 503 : 200).json(data);
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Provider unreachable: ${err.message}` });
+    }
+});
+// 2. Validate Player ID (Check ID)
+app.get(['/api/v1/game/check_id', '/api/v1/game2/check_id', '/api/v2/game/check_id', '/api/provider/check-id'], generalApiLimiter, async (req, res) => {
+    const game = (req.query.game || req.query.game_code || '').trim();
+    const userid = (req.query.id || req.query.userid || req.query.user_id || req.query.game_user_id || req.query.playerId || '').trim();
+    const serverid = (req.query.zone_id || req.query.server_id || req.query.serverid || req.query.serverId || req.query.playerZoneId || '').trim();
+    if (!game || !userid) {
+        return res.status(400).json({ success: false, status: 'FAILED', message: 'game and userid/id are required' });
+    }
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    // 1. Direct query to live upstream provider
+    for (const stockBase of bases) {
+        try {
+            let upstreamUrl = `${stockBase}/check_id?game=${encodeURIComponent(game)}&game_code=${encodeURIComponent(game)}&userid=${encodeURIComponent(userid)}&game_user_id=${encodeURIComponent(userid)}&id=${encodeURIComponent(userid)}`;
+            if (serverid) {
+                upstreamUrl += `&zone_id=${encodeURIComponent(serverid)}&server_id=${encodeURIComponent(serverid)}&serverid=${encodeURIComponent(serverid)}`;
+            }
+            const upRes = await fetch(upstreamUrl, {
+                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(6000),
+            });
+            if (upRes.ok) {
+                const data = await upRes.json();
+                if (data && (data.status === 'APPROVED' || data.valid === true || data.username)) {
+                    return res.json(data);
+                }
+            }
+        }
+        catch (err) {
+            console.warn('[Check ID] Upstream provider query note on', stockBase, err.message);
+        }
+    }
+    // 2. Fallback to our robust multi-provider lookup
+    try {
+        const result = await (0, gameProviderMock_1.lookupPlayerNickname)(game, userid, serverid);
+        if (result.success) {
+            return res.json({
+                status: 'APPROVED',
+                valid: true,
+                message: 'Player ID successfully verified',
+                username: result.nickname,
+                region: result.region || 'SG',
+                game_title: game,
+                level: result.level,
+                playerId: result.playerId,
+                playerZoneId: result.playerZoneId,
+                avatarUrl: result.avatarUrl,
+            });
+        }
+        else {
+            return res.status(400).json({
+                status: 'FAILED',
+                valid: false,
+                message: result.error || 'Player ID not found',
+            });
+        }
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Validation unreachable: ${err.message}` });
+    }
+});
+// 3. Categories (List of game categories)
+app.get(['/api/v1/game/categories', '/api/v1/game2/categories', '/api/v2/game/categories', '/api/provider/categories'], generalApiLimiter, async (req, res) => {
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    for (const stockBase of bases) {
+        try {
+            const upRes = await fetch(`${stockBase}/categories`, {
+                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(6000),
+            });
+            if (upRes.ok) {
+                const data = await upRes.json();
+                if (data && data.status !== 404 && data.code !== 'NOT_FOUND') {
+                    return res.json(data);
+                }
+            }
+        }
+        catch (e) { }
+    }
+    try {
+        const data = await (0, gameProviderMock_1.fetchProviderCategories)();
+        return res.status(data.status === 'FAILED' ? 503 : 200).json(data);
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Categories unreachable: ${err.message}` });
+    }
+});
+// 4. Products (Packages & prices for a game)
+app.get(['/api/v1/game/products', '/api/v1/game2/products', '/api/v2/game/products', '/api/provider/products'], generalApiLimiter, async (req, res) => {
+    const gameCode = (req.query.game_code || req.query.game || '').trim();
+    if (!gameCode) {
+        return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'game_code is required' });
+    }
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    for (const stockBase of bases) {
+        try {
+            const upRes = await fetch(`${stockBase}/products?game_code=${encodeURIComponent(gameCode)}`, {
+                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(6000),
+            });
+            if (upRes.ok) {
+                const data = await upRes.json();
+                if (data && data.status !== 404 && data.code !== 'NOT_FOUND') {
+                    return res.json(data);
+                }
+            }
+        }
+        catch (e) { }
+    }
+    try {
+        const data = await (0, gameProviderMock_1.fetchProviderProducts)(gameCode);
+        return res.status(data.status === 'FAILED' ? 503 : 200).json(data);
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Products unreachable: ${err.message}` });
+    }
+});
+// 5. Create Order (Place top-up)
+app.post(['/api/v1/game/create_order', '/api/v1/game2/create_order', '/api/v2/game/create_order', '/api/provider/create-order'], generalApiLimiter, async (req, res) => {
+    const { product_code, game_user_id, server_id, zone_id, reference } = req.body || {};
+    if (!product_code || !game_user_id || !reference) {
+        return res.status(400).json({
+            status: 'FAILED',
+            code: 'MISSING_FIELDS',
+            message: 'product_code, game_user_id, and reference are required',
+        });
+    }
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    // Direct live upstream call to provider
+    for (const stockBase of bases) {
+        try {
+            const payload = {
+                product_code,
+                game_user_id: String(game_user_id).trim(),
+                reference: String(reference).trim(),
+            };
+            if (server_id || zone_id) {
+                payload.server_id = String(server_id || zone_id).trim();
+                payload.zone_id = String(server_id || zone_id).trim();
+            }
+            const upRes = await fetch(`${stockBase}/create_order`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': apiKey,
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(10000),
+            });
+            const data = await upRes.json();
+            if (upRes.status !== 404 && data?.code !== 'NOT_FOUND') {
+                return res.status(upRes.status).json(data);
+            }
+        }
+        catch (err) {
+            console.warn('[Create Order] Upstream direct call note on', stockBase, err.message);
+        }
+    }
+    // Fallback to deliverTopup
+    try {
+        const result = await (0, gameProviderMock_1.deliverTopup)('direct', String(game_user_id).trim(), server_id || zone_id || null, product_code, 0, reference, product_code);
+        if (result.success) {
+            return res.json({
+                status: 'SUCCESS',
+                message: 'Successful Orders',
+                reference: result.referenceId || reference,
+                amount: 0,
+                balance_after: 0,
+            });
+        }
+        else {
+            return res.status(400).json({
+                status: 'FAILED',
+                message: result.error || 'Provider order placement failed',
+                reference,
+            });
+        }
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Order delivery unreachable: ${err.message}` });
+    }
+});
+// 6. Check Order Status
+app.get(['/api/v1/game/check_order', '/api/v1/game2/check_order', '/api/v2/game/check_order', '/api/provider/check-order'], generalApiLimiter, async (req, res) => {
+    const reference = (req.query.reference || req.query.ref || '').trim();
+    if (!reference) {
+        return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'reference is required' });
+    }
+    const bases = getStockBases(req.originalUrl || req.path);
+    const apiKey = getApiKey(req);
+    for (const stockBase of bases) {
+        try {
+            const upRes = await fetch(`${stockBase}/check_order?reference=${encodeURIComponent(reference)}`, {
+                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                signal: AbortSignal.timeout(6000),
+            });
+            const data = await upRes.json();
+            if (upRes.ok)
+                return res.json(data);
+            if (upRes.status === 404 && data?.message && !data.message.includes('No route for')) {
+                return res.status(404).json(data);
+            }
+        }
+        catch (e) { }
+    }
+    try {
+        const data = await (0, gameProviderMock_1.checkTopupOrderStatus)(reference);
+        if (data) {
+            return res.json(data);
+        }
+        return res.status(404).json({ success: false, message: 'Order reference not found on provider' });
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Order check unreachable: ${err.message}` });
+    }
+});
+// 7. Deposit Balance
+app.post(['/api/v1/game/deposit', '/api/v1/game2/deposit', '/api/v2/game/deposit', '/api/provider/deposit'], generalApiLimiter, async (req, res) => {
+    const amount = Number(req.body?.amount);
+    if (!amount || amount <= 0) {
+        return res.status(400).json({ success: false, code: 'INVALID_AMOUNT', message: 'Please enter an amount greater than 0.' });
+    }
+    try {
+        const data = await (0, gameProviderMock_1.depositProviderBalance)(amount, req.body?.currency || 'USD');
+        return res.status(data.status === 'FAILED' ? 503 : 200).json(data);
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Deposit unreachable: ${err.message}` });
+    }
+});
+// Legacy proxy route for backward compatibility
+app.get('/api/provider/orders', generalApiLimiter, async (_req, res) => {
+    try {
+        const data = await (0, gameProviderMock_1.fetchProviderProfile)();
+        return res.status(200).json(data);
+    }
+    catch (err) {
+        return res.status(503).json({ success: false, error: `Provider unreachable: ${err.message}` });
+    }
+});
 // ─── Product Image Upload ─────────────────────────────────────────────────────
 const auth_2 = require("./middleware/auth");
 const storage = multer_1.default.diskStorage({

@@ -2,6 +2,12 @@ import { Router, Response } from 'express';
 import prisma from '../prisma';
 import { authenticateJWT, requireAdmin, AuthenticatedRequest } from '../middleware/auth';
 import { broadcastRealtimeEvent } from '../lib/supabase';
+import {
+  getDynamicApiSettings,
+  saveDynamicApiSettings,
+  resetDynamicApiSettings,
+  testProviderConnection,
+} from '../utils/apiConfig';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
@@ -67,10 +73,19 @@ router.get('/products', async (req: AuthenticatedRequest, res: Response) => {
       },
       orderBy: { name: 'asc' },
     });
-    return res.status(200).json(products);
+    return res.status(200).json({
+      success: true,
+      message: 'Admin products retrieved',
+      data: products,
+      payload: products,
+    });
   } catch (error: any) {
     console.error('Error fetching admin products:', error);
-    return res.status(500).json({ error: 'Database error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Database error',
+      error: { message: error?.message || 'Database error' },
+    });
   }
 });
 
@@ -166,14 +181,31 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const totalOrdersCount = await prisma.order.count();
     const completedOrdersCount = await prisma.order.count({ 
-      where: { status: { in: ['COMPLETED', 'SUCCESS'] } } 
+      where: { 
+        OR: [
+          { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+          { paymentStatus: 'SUCCESS' },
+        ]
+      } 
     });
-    const pendingOrdersCount = await prisma.order.count({ where: { status: 'PENDING' } });
-    const failedOrdersCount = await prisma.order.count({ where: { status: 'FAILED' } });
+    const pendingOrdersCount = await prisma.order.count({ 
+      where: { 
+        status: { in: ['PENDING', 'PROCESSING', 'WAITING'] },
+        paymentStatus: { notIn: ['SUCCESS', 'PAID', 'EXPIRED', 'FAILED'] }
+      } 
+    });
+    const failedOrdersCount = await prisma.order.count({ 
+      where: { status: { in: ['FAILED', 'CANCELLED', 'EXPIRED'] } } 
+    });
 
     // Calculate sum of price for completed orders
     const revenueSum = await prisma.order.aggregate({
-      where: { status: { in: ['COMPLETED', 'SUCCESS'] } },
+      where: { 
+        OR: [
+          { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+          { paymentStatus: 'SUCCESS' },
+        ]
+      },
       _sum: {
         price: true,
       },
@@ -187,6 +219,9 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
         package: {
           include: { product: true },
         },
+        user: {
+          select: { id: true, email: true },
+        },
       },
     });
 
@@ -196,7 +231,16 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
         packages: {
           include: {
             _count: {
-              select: { orders: { where: { status: { in: ['COMPLETED', 'SUCCESS'] } } } },
+              select: { 
+                orders: { 
+                  where: { 
+                    OR: [
+                      { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+                      { paymentStatus: 'SUCCESS' },
+                    ]
+                  } 
+                } 
+              },
             },
           },
         },
@@ -218,7 +262,7 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
     }
     const popularity = Array.from(popMap.values()).sort((a, b) => b.salesCount - a.salesCount);
 
-    return res.status(200).json({
+    const statsData = {
       metrics: {
         totalRevenue: revenueSum._sum.price || 0,
         totalOrders: totalOrdersCount,
@@ -228,10 +272,22 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
       },
       recentOrders,
       popularity,
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin metrics retrieved',
+      data: statsData,
+      payload: statsData,
+      ...statsData,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Admin metrics error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' },
+    });
   }
 });
 
@@ -243,7 +299,17 @@ router.get('/orders', async (req: AuthenticatedRequest, res: Response) => {
 
     const whereClause: any = {};
     if (status) {
-      whereClause.status = status;
+      const upperStatus = status.toUpperCase();
+      if (upperStatus === 'COMPLETED' || upperStatus === 'SUCCESS' || upperStatus === 'PAID') {
+        whereClause.OR = [
+          { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+          { paymentStatus: 'SUCCESS' },
+        ];
+      } else if (upperStatus === 'PENDING') {
+        whereClause.status = { in: ['PENDING', 'PROCESSING', 'WAITING'] };
+      } else {
+        whereClause.status = status;
+      }
     }
     if (search) {
       whereClause.OR = [
@@ -261,16 +327,25 @@ router.get('/orders', async (req: AuthenticatedRequest, res: Response) => {
           include: { product: true },
         },
         user: {
-          select: { email: true },
+          select: { id: true, email: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return res.status(200).json(orders);
-  } catch (error) {
+    return res.status(200).json({
+      success: true,
+      message: 'Admin orders retrieved',
+      data: orders,
+      payload: orders,
+    });
+  } catch (error: any) {
     console.error('Admin fetch orders error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' },
+    });
   }
 });
 
@@ -380,7 +455,7 @@ router.post('/orders/:id/auto-fulfill', async (req: AuthenticatedRequest, res: R
     }
 
     const { processVerifiedPayment } = await import('../utils/paymentVerification');
-    const result = await processVerifiedPayment(order, `ADMIN-AUTO-FULFILL-${Date.now()}`);
+    const result = await processVerifiedPayment(order, `ADMIN-AUTO-FULFILL-${Date.now()}`, { forceFulfill: true });
 
     broadcastRealtimeEvent('orders-realtime', 'ORDER_AUTO_FULFILLED', {
       id: order.id,
@@ -471,7 +546,7 @@ router.post('/stock', async (req: AuthenticatedRequest, res: Response) => {
 // 6. Product management: Add a new game product
 router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel } = req.body;
+    const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel, hasCheckId, checkIdGameCode } = req.body;
 
     if (!name || !category) {
       return res.status(400).json({ error: 'Product name and category are required' });
@@ -501,6 +576,8 @@ router.post('/products', async (req: AuthenticatedRequest, res: Response) => {
         isActive: true,
         hasZoneId: hasZoneId === true || hasZoneId === 'true',
         zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
+        hasCheckId: hasCheckId === undefined ? true : (hasCheckId === true || hasCheckId === 'true'),
+        checkIdGameCode: checkIdGameCode ? String(checkIdGameCode).trim() : null,
       },
     });
 
@@ -627,7 +704,7 @@ router.post('/products/:productId/packages', async (req: AuthenticatedRequest, r
 router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel } = req.body;
+    const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel, hasCheckId, checkIdGameCode } = req.body;
 
     let existingProduct = await prisma.product.findFirst({
       where: { OR: [{ id }, { slug: id }] },
@@ -641,6 +718,8 @@ router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest
     if (slug !== undefined) data.slug = slug;
     if (hasZoneId !== undefined) data.hasZoneId = hasZoneId === true || hasZoneId === 'true';
     if (zoneIdLabel !== undefined) data.zoneIdLabel = zoneIdLabel ? String(zoneIdLabel).trim() : null;
+    if (hasCheckId !== undefined) data.hasCheckId = hasCheckId === true || hasCheckId === 'true';
+    if (checkIdGameCode !== undefined) data.checkIdGameCode = checkIdGameCode ? String(checkIdGameCode).trim() : null;
 
     let updated;
     if (existingProduct) {
@@ -657,6 +736,8 @@ router.patch(['/products/:id', '/product/:id'], async (req: AuthenticatedRequest
           isActive: isActive !== undefined ? isActive : true,
           hasZoneId: hasZoneId === true || hasZoneId === 'true',
           zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
+          hasCheckId: hasCheckId === undefined ? true : (hasCheckId === true || hasCheckId === 'true'),
+          checkIdGameCode: checkIdGameCode ? String(checkIdGameCode).trim() : null,
         },
       });
       console.log(`[Admin Dashboard] Created missing product during update: ${updated.name}`);
@@ -1242,6 +1323,107 @@ router.delete('/contact/:id', async (req: AuthenticatedRequest, res: Response) =
   } catch (error: any) {
     console.error('Admin delete contact message error:', error);
     return res.status(500).json({ error: 'Failed to delete contact message' });
+  }
+});
+
+// ─── API & PROVIDER SETTINGS MANAGEMENT ──────────────────────────
+router.get('/settings/api', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const settings = await getDynamicApiSettings(true);
+    return res.status(200).json({
+      success: true,
+      settings,
+      presets: [
+        {
+          name: 'VNGZZ Stock 2 (Recommended)',
+          url: 'https://www.vngzz2game.site/api/v1/game2',
+          stock: 2,
+          description: 'Official Moonton & 150+ games direct topup with live ABA KHQR',
+        },
+        {
+          name: 'VNGZZ Stock 1',
+          url: 'https://www.vngzz2game.site/api/v1/game',
+          stock: 1,
+          description: 'Alternative catalog stock & regional games',
+        },
+        {
+          name: 'VNGZZ API v2 Gateway',
+          url: 'https://www.vngzz2game.site/api/v2/game',
+          stock: 2,
+          description: 'Next-generation V2 API endpoint',
+        },
+      ],
+    });
+  } catch (error: any) {
+    console.error('Admin get API settings error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch API settings' });
+  }
+});
+
+router.post('/settings/api', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const {
+      providerApiKey,
+      providerStock1Url,
+      providerStock2Url,
+      providerV2Url,
+      providerActiveStock,
+      providerActiveUrl,
+      providerAutoDelivery,
+      bakongMerchantName,
+      bakongAccountId,
+    } = req.body;
+
+    const updated = await saveDynamicApiSettings({
+      ...(providerApiKey !== undefined ? { providerApiKey: providerApiKey.trim() } : {}),
+      ...(providerStock1Url !== undefined ? { providerStock1Url: providerStock1Url.trim() } : {}),
+      ...(providerStock2Url !== undefined ? { providerStock2Url: providerStock2Url.trim() } : {}),
+      ...(providerV2Url !== undefined ? { providerV2Url: providerV2Url.trim() } : {}),
+      ...(providerActiveStock !== undefined ? { providerActiveStock: Number(providerActiveStock) as 1 | 2 } : {}),
+      ...(providerActiveUrl !== undefined ? { providerActiveUrl: providerActiveUrl.trim() } : {}),
+      ...(providerAutoDelivery !== undefined ? { providerAutoDelivery: Boolean(providerAutoDelivery) } : {}),
+      ...(bakongMerchantName !== undefined ? { bakongMerchantName: bakongMerchantName.trim() } : {}),
+      ...(bakongAccountId !== undefined ? { bakongAccountId: bakongAccountId.trim() } : {}),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'API settings updated and applied across all website systems successfully!',
+      settings: updated,
+    });
+  } catch (error: any) {
+    console.error('Admin update API settings error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to save API settings' });
+  }
+});
+
+router.post('/settings/api/test', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { providerApiKey, providerActiveUrl } = req.body;
+    const result = await testProviderConnection(providerApiKey, providerActiveUrl);
+    return res.status(200).json(result);
+  } catch (error: any) {
+    console.error('Admin test API error:', error);
+    return res.status(500).json({
+      success: false,
+      status: 500,
+      latencyMs: 0,
+      message: error.message || 'Test failed',
+    });
+  }
+});
+
+router.post('/settings/api/reset', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const reset = await resetDynamicApiSettings();
+    return res.status(200).json({
+      success: true,
+      message: 'API settings restored to factory defaults.',
+      settings: reset,
+    });
+  } catch (error: any) {
+    console.error('Admin reset API settings error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to reset settings' });
   }
 });
 

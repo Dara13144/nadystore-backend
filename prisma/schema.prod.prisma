@@ -26,9 +26,11 @@ model Product {
   image       String    // Logo image URL/path
   category    String    // MOBILE_GAME, PC_GAME, VOUCHER
   isActive    Boolean   @default(true)
-  hasZoneId   Boolean   @default(false)
-  zoneIdLabel String?
-  packages    Package[]
+  hasZoneId       Boolean   @default(false)
+  zoneIdLabel     String?
+  hasCheckId      Boolean   @default(true)
+  checkIdGameCode String?
+  packages        Package[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }

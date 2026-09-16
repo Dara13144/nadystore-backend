@@ -22,11 +22,18 @@ router.get('/', async (req: Request, res: Response) => {
       },
       orderBy: { name: 'asc' },
     });
-    return res.status(200).json(products);
+    return res.status(200).json({
+      success: true,
+      message: 'Products retrieved successfully',
+      data: products,
+      payload: products,
+    });
   } catch (error: any) {
     console.error("DATABASE ERROR:", error);
     return res.status(500).json({
-      error: "Internal database error",
+      success: false,
+      message: error?.message || "Internal database error",
+      error: { message: error?.message || "Internal database error" },
     });
   }
 });
@@ -39,19 +46,67 @@ const handlePlayerLookup = async (req: Request, res: Response) => {
     const gameSlug = req.params.gameSlug || req.params.slug || req.body?.gameSlug || req.body?.slug || '';
     const playerId = (req.query.playerId as string) || (req.body?.playerId as string) || '';
     const playerZoneId = (req.query.playerZoneId as string) || (req.body?.playerZoneId as string) || (req.body?.zoneId as string) || '';
+    const queryCheckCode = (req.query.checkIdGameCode as string) || (req.body?.checkIdGameCode as string) || '';
+    let queryHasCheckId = req.query.hasCheckId !== undefined 
+      ? String(req.query.hasCheckId) === 'true' 
+      : (req.body?.hasCheckId !== undefined ? (req.body.hasCheckId === true || req.body.hasCheckId === 'true') : undefined);
 
     if (!playerId.trim()) {
       return res.status(400).json({ success: false, error: 'Player ID is required' });
     }
 
-    const result = await lookupPlayerNickname(gameSlug, playerId, playerZoneId);
+    // Resolve product checkId settings from DB if not explicitly supplied
+    let effectiveCheckCode = queryCheckCode ? queryCheckCode.trim() : '';
+    let effectiveHasCheckId = queryHasCheckId;
+
+    if (gameSlug && (effectiveHasCheckId === undefined || !effectiveCheckCode)) {
+      try {
+        const prod = await (prisma.product as any).findFirst({
+          where: {
+            OR: [
+              { slug: gameSlug.toLowerCase() },
+              { slug: gameSlug },
+              { id: gameSlug },
+            ],
+          },
+          select: { hasCheckId: true, checkIdGameCode: true },
+        });
+        if (prod) {
+          if (effectiveHasCheckId === undefined && prod.hasCheckId !== undefined) {
+            effectiveHasCheckId = prod.hasCheckId;
+          }
+          if (!effectiveCheckCode && prod.checkIdGameCode) {
+            effectiveCheckCode = prod.checkIdGameCode;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('[handlePlayerLookup] DB lookup error:', dbErr);
+      }
+    }
+
+    // Direct topup without check ID required
+    if (effectiveHasCheckId === false) {
+      return res.status(200).json({
+        success: true,
+        nickname: `Player_${playerId.trim().slice(-4)}`,
+        region: 'Direct Recharge',
+        level: 1,
+        avatarUrl: `/images/games/${gameSlug}.png`,
+        playerId: playerId.trim(),
+        playerZoneId: playerZoneId ? playerZoneId.trim() : null,
+        isBypassed: true,
+      });
+    }
+
+    const effectiveSlug = effectiveCheckCode || gameSlug;
+    const result = await lookupPlayerNickname(effectiveSlug, playerId, playerZoneId);
     if (result && result.success && result.nickname) {
       return res.status(200).json({ 
         success: true, 
         nickname: result.nickname,
         region: result.region || 'Cambodia (Asia)',
         level: result.level || 45,
-        avatarUrl: result.avatarUrl || '/images/games/mlbb.png',
+        avatarUrl: result.avatarUrl || `/images/games/${gameSlug}.png`,
         playerId: result.playerId || playerId.trim(),
         playerZoneId: result.playerZoneId || (playerZoneId ? playerZoneId.trim() : null),
       });
@@ -75,6 +130,42 @@ router.post('/:slug/check-name', handlePlayerLookup);
 router.post('/check-player', handlePlayerLookup);
 
 
+// In-memory cache for Stock 2 categories
+let stock2CategoriesCache: any[] = [];
+let stock2CategoriesCacheTime = 0;
+
+// 2b. Get all Game Stock 2 categories (Public)
+router.get(['/stock2/categories', '/game2/categories'], async (_req: Request, res: Response) => {
+  const now = Date.now();
+  if (stock2CategoriesCache.length > 0 && now - stock2CategoriesCacheTime < 5 * 60 * 1000) {
+    return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+  }
+
+  const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+  try {
+    const upstreamRes = await fetch('https://www.vngzz2game.site/api/v1/game2/categories', {
+      headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (upstreamRes.ok) {
+      const data: any = await upstreamRes.json();
+      if (data && data.categories && Array.isArray(data.categories)) {
+        stock2CategoriesCache = data.categories;
+        stock2CategoriesCacheTime = now;
+        return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Products] Stock 2 categories error:', err.message);
+  }
+
+  if (stock2CategoriesCache.length > 0) {
+    return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
+  }
+
+  return res.status(503).json({ success: false, error: 'Failed to fetch Game Stock 2 categories' });
+});
+
 // 3. Get specific product by slug (Public)
 router.get('/:slug', async (req: Request, res: Response) => {
   try {
@@ -84,12 +175,24 @@ router.get('/:slug', async (req: Request, res: Response) => {
     const rawSlug = decodeURIComponent(req.params.slug).trim();
     const slug = rawSlug.toLowerCase();
 
-    const product = await prisma.product.findFirst({
+    let product = await prisma.product.findFirst({
       where: {
         OR: [
           { slug: slug },
           { slug: rawSlug },
           { id: rawSlug },
+          ...(slug === 'telegram' ? [{ slug: 'telegram-premium' }] : []),
+          ...(slug === 'telegram-premium' ? [{ slug: 'telegram' }] : []),
+          ...(slug === 'mobile-legend' || slug === 'mlbb' || slug === 'ml' ? [{ slug: 'mobile-legends' }] : []),
+          ...(slug === 'mobile-legends' ? [{ slug: 'mobile-legend' }] : []),
+          ...(slug === 'freefire' || slug === 'ff' ? [{ slug: 'free-fire' }] : []),
+          ...(slug === 'free-fire' ? [{ slug: 'freefire' }] : []),
+          ...(slug === 'pubg' ? [{ slug: 'pubg-mobile' }] : []),
+          ...(slug === 'pubg-mobile' ? [{ slug: 'pubg' }] : []),
+          ...(slug === 'hok' ? [{ slug: 'honor-of-kings' }] : []),
+          ...(slug === 'honor-of-kings' ? [{ slug: 'hok' }] : []),
+          ...(slug === 'genshin' ? [{ slug: 'genshin-impact' }] : []),
+          ...(slug === 'genshin-impact' ? [{ slug: 'genshin' }] : []),
         ],
         isActive: true,
       },
@@ -102,13 +205,74 @@ router.get('/:slug', async (req: Request, res: Response) => {
     });
 
     if (!product) {
-      return res.status(404).json({ error: 'Product not found' });
+      // Check if it is a Stock 2 game!
+      const cleanCode = slug.replace(/^(stock2-|game2-)/i, '').trim();
+      const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+      
+      try {
+        const stock2Res = await fetch(`https://www.vngzz2game.site/api/v1/game2/products?game_code=${encodeURIComponent(cleanCode)}`, {
+          headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(7000),
+        });
+        if (stock2Res.ok) {
+          const s2Data = await stock2Res.json() as any;
+          if (s2Data && s2Data.status === 'SUCCESS' && s2Data.game) {
+            const game = s2Data.game;
+            const pkgs = (s2Data.products || s2Data.data || []).map((p: any) => ({
+              id: `pkg-${p.code || p.product_code}`,
+              name: p.name,
+              price: Number(p.sell_price || p.price || p.base_price || 0),
+              originalPrice: Number(p.cost_price || p.base_price || p.price),
+              productCode: p.product_code || p.code,
+              description: `Game Stock 2 · Instant Delivery`,
+              isActive: true,
+              productId: `stock2-${game.game_code || cleanCode}`,
+            }));
+
+            return res.status(200).json({
+              id: `stock2-${game.game_code || cleanCode}`,
+              name: game.name,
+              slug: `stock2-${game.game_code || cleanCode}`,
+              category: 'MOBILE_GAME',
+              description: game.description || 'Game Stock 2 Instant Delivery',
+              imageUrl: game.image_url || '/images/games/default.png',
+              bannerUrl: game.image_url || null,
+              isActive: true,
+              packages: pkgs,
+              fields: game.fields || ['User ID'],
+              inputs: game.inputs || [],
+              need_server: !!game.need_server,
+              stock: 'Stock 2',
+            });
+          }
+        }
+      } catch (s2Err) {
+        console.warn('[Products] Stock 2 lookup warning:', (s2Err as any)?.message);
+      }
     }
 
-    return res.status(200).json(product);
-  } catch (error) {
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found',
+        error: { message: 'Product not found' },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Product retrieved successfully',
+      data: product,
+      payload: product,
+      ...product,
+    });
+  } catch (error: any) {
     console.error('Error fetching product details:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' },
+    });
   }
 });
 

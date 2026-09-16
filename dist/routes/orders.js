@@ -9,6 +9,7 @@ const gameProviderMock_1 = require("../utils/gameProviderMock");
 const paymentMock_1 = require("../utils/paymentMock");
 const telegram_1 = require("../utils/telegram");
 const paymentVerification_1 = require("../utils/paymentVerification");
+const securityLogger_1 = __importDefault(require("../middleware/securityLogger"));
 const router = (0, express_1.Router)();
 // Check Player ID & Zone ID (Public)
 router.post('/check-player', async (req, res) => {
@@ -126,6 +127,21 @@ router.post('/', async (req, res) => {
         }
         if (!pkg || !pkg.isActive) {
             return res.status(404).json({ error: 'Package not found or currently inactive' });
+        }
+        // ✅ OWASP A04: Insecure Design — ALWAYS use server-side price, never trust client-supplied price.
+        // Detect and log any price manipulation attempts.
+        if (price !== undefined && price !== null) {
+            const clientPrice = parseFloat(String(price));
+            if (!isNaN(clientPrice) && Math.abs(clientPrice - pkg.price) > 0.05) {
+                securityLogger_1.default.suspiciousActivity(req, 'PRICE_MANIPULATION', {
+                    clientSentPrice: clientPrice,
+                    actualDbPrice: pkg.price,
+                    packageId: pkg.id,
+                    packageName: pkg.name,
+                    userId: req.user?.id || 'guest',
+                });
+                // Still continue — we use pkg.price below, not the client value
+            }
         }
         // Validate Zone ID / Server ID if required by product
         const isMLBBGame = pkg.product.slug.includes('mobile-legend') || pkg.product.slug.includes('mlbb') || pkg.product.slug.includes('moonton') || pkg.product.name.toLowerCase().includes('mobile legends');

@@ -191,13 +191,30 @@ router.get('/stats', async (req, res) => {
     try {
         const totalOrdersCount = await prisma_1.default.order.count();
         const completedOrdersCount = await prisma_1.default.order.count({
-            where: { status: { in: ['COMPLETED', 'SUCCESS'] } }
+            where: {
+                OR: [
+                    { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+                    { paymentStatus: 'SUCCESS' },
+                ]
+            }
         });
-        const pendingOrdersCount = await prisma_1.default.order.count({ where: { status: 'PENDING' } });
-        const failedOrdersCount = await prisma_1.default.order.count({ where: { status: 'FAILED' } });
+        const pendingOrdersCount = await prisma_1.default.order.count({
+            where: {
+                status: { in: ['PENDING', 'PROCESSING', 'WAITING'] },
+                paymentStatus: { notIn: ['SUCCESS', 'PAID', 'EXPIRED', 'FAILED'] }
+            }
+        });
+        const failedOrdersCount = await prisma_1.default.order.count({
+            where: { status: { in: ['FAILED', 'CANCELLED', 'EXPIRED'] } }
+        });
         // Calculate sum of price for completed orders
         const revenueSum = await prisma_1.default.order.aggregate({
-            where: { status: { in: ['COMPLETED', 'SUCCESS'] } },
+            where: {
+                OR: [
+                    { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+                    { paymentStatus: 'SUCCESS' },
+                ]
+            },
             _sum: {
                 price: true,
             },
@@ -210,6 +227,9 @@ router.get('/stats', async (req, res) => {
                 package: {
                     include: { product: true },
                 },
+                user: {
+                    select: { id: true, email: true },
+                },
             },
         });
         // Game popularity distribution (Completed order counts per game product)
@@ -218,7 +238,16 @@ router.get('/stats', async (req, res) => {
                 packages: {
                     include: {
                         _count: {
-                            select: { orders: { where: { status: { in: ['COMPLETED', 'SUCCESS'] } } } },
+                            select: {
+                                orders: {
+                                    where: {
+                                        OR: [
+                                            { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+                                            { paymentStatus: 'SUCCESS' },
+                                        ]
+                                    }
+                                }
+                            },
                         },
                     },
                 },
@@ -263,7 +292,19 @@ router.get('/orders', async (req, res) => {
         const search = req.query.search;
         const whereClause = {};
         if (status) {
-            whereClause.status = status;
+            const upperStatus = status.toUpperCase();
+            if (upperStatus === 'COMPLETED' || upperStatus === 'SUCCESS' || upperStatus === 'PAID') {
+                whereClause.OR = [
+                    { status: { in: ['COMPLETED', 'SUCCESS', 'PAID'] } },
+                    { paymentStatus: 'SUCCESS' },
+                ];
+            }
+            else if (upperStatus === 'PENDING') {
+                whereClause.status = { in: ['PENDING', 'PROCESSING', 'WAITING'] };
+            }
+            else {
+                whereClause.status = status;
+            }
         }
         if (search) {
             whereClause.OR = [
@@ -280,7 +321,7 @@ router.get('/orders', async (req, res) => {
                     include: { product: true },
                 },
                 user: {
-                    select: { email: true },
+                    select: { id: true, email: true },
                 },
             },
             orderBy: { createdAt: 'desc' },
@@ -386,7 +427,7 @@ router.post('/orders/:id/auto-fulfill', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Order not found' });
         }
         const { processVerifiedPayment } = await Promise.resolve().then(() => __importStar(require('../utils/paymentVerification')));
-        const result = await processVerifiedPayment(order, `ADMIN-AUTO-FULFILL-${Date.now()}`);
+        const result = await processVerifiedPayment(order, `ADMIN-AUTO-FULFILL-${Date.now()}`, { forceFulfill: true });
         (0, supabase_1.broadcastRealtimeEvent)('orders-realtime', 'ORDER_AUTO_FULFILLED', {
             id: order.id,
             paymentTxnId: order.paymentTxnId,

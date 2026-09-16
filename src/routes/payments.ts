@@ -252,21 +252,36 @@ router.post('/create', async (req: AuthenticatedRequest, res: Response) => {
     const telegramMessage = `${playerIdFull} ${pkg.name}`.trim();
     await sendTelegramNotification(telegramMessage);
 
-    return res.status(201).json({
-      message: 'Order created successfully',
+    const orderData = {
       order: {
         id: order.id,
         paymentTxnId,
+        packageName: pkg.name,
+        gameName: pkg.product?.name || 'Game Topup',
         price: order.price,
         status: order.status,
         paymentStatus: order.paymentStatus,
         playerNickname: nickname,
+        createdAt: order.createdAt,
       },
       paymentDetails,
+    };
+
+    return res.status(201).json({
+      success: true,
+      message: 'Order created successfully',
+      data: orderData,
+      payload: orderData,
+      order: orderData.order,
+      paymentDetails,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Order creation error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' }
+    });
   }
 });
 
@@ -301,28 +316,44 @@ router.get('/status/:transactionId', async (req, res) => {
     const payUrl = order.gatewayRef && order.gatewayRef.startsWith('TXN-') ? `https://www.vngzz2game.site/pay/${order.gatewayRef}` : null;
     const qrImageUrl = order.paymentQrCode ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=4&data=${encodeURIComponent(order.paymentQrCode)}` : null;
 
-    return res.status(200).json({
+    const statusData = {
       id: order.id,
+      paymentTxnId: order.paymentTxnId,
       transactionId: order.paymentTxnId,
       gameName: order.package.product.name,
       gameSlug: order.package.product.slug,
       packageName: order.package.name,
       playerId: order.playerId,
+      playerZoneId: order.playerZoneId,
       playerNickname: order.playerNickname,
+      price: order.price,
       amount: order.price,
       status: order.status,
       paymentStatus: order.paymentStatus,
       paymentMethod: order.paymentMethod,
       stockDeliveredCode: order.stockDeliveredCode,
       paymentQrCode: order.paymentQrCode,
+      paymentMd5: order.paymentMd5,
       deepLink,
       payUrl,
       qrImageUrl,
       createdAt: order.createdAt,
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order status fetched successfully',
+      data: statusData,
+      payload: statusData,
+      ...statusData,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Fetch order status error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' }
+    });
   }
 });
 

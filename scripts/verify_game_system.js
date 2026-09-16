@@ -26,7 +26,10 @@ async function run() {
   const resBefore = await fetch('http://localhost:5001/api/products', {
     headers: { 'Cache-Control': 'no-cache' }
   });
-  const productsBefore = await resBefore.json();
+  const productsBeforeRaw = await resBefore.json();
+  const productsBefore = Array.isArray(productsBeforeRaw)
+    ? productsBeforeRaw
+    : (productsBeforeRaw.data || productsBeforeRaw.payload || []);
   const existsBefore = productsBefore.some(p => p.id === gameA.id);
   console.log('✅ Game A visible in GET /api/products:', existsBefore);
 
@@ -43,7 +46,10 @@ async function run() {
   const resAfter = await fetch('http://localhost:5001/api/products', {
     headers: { 'Cache-Control': 'no-cache' }
   });
-  const productsAfter = await resAfter.json();
+  const productsAfterRaw = await resAfter.json();
+  const productsAfter = Array.isArray(productsAfterRaw)
+    ? productsAfterRaw
+    : (productsAfterRaw.data || productsAfterRaw.payload || []);
   const existsAfter = productsAfter.some(p => p.id === gameA.id);
   console.log('✅ Game A returned by GET /api/products after delete (must be false):', existsAfter);
 

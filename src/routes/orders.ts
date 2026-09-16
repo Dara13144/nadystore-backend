@@ -5,6 +5,7 @@ import { lookupPlayerNickname } from '../utils/gameProviderMock';
 import { generateABAMockPayment, generateBakongKHQR, verifyBakongWebhook } from '../utils/paymentMock';
 import { sendTelegramNotification } from '../utils/telegram';
 import { verifyAbaKhqrPayment, processVerifiedPayment } from '../utils/paymentVerification';
+import securityLogger from '../middleware/securityLogger';
 
 const router = Router();
 
@@ -99,6 +100,21 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
         }).catch(() => null);
       }
 
+      // If still no product and slug provided (e.g. Stock 2 game), auto-provision product
+      if (!prod && targetSlug) {
+        const cleanGameName = targetSlug.replace(/^(stock2-|game2-)/i, '').replace(/[-_]/g, ' ').toUpperCase();
+        prod = await prisma.product.create({
+          data: {
+            name: cleanGameName,
+            slug: targetSlug,
+            category: 'MOBILE_GAME',
+            image: `/images/games/${targetSlug}.png`,
+            isActive: true,
+          },
+          include: { packages: true },
+        }).catch(() => null);
+      }
+
       // If still no product, search for any active product in database
       if (!prod) {
         prod = await prisma.product.findFirst({
@@ -110,7 +126,11 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
       // If no active product found, reject with 404
       if (!prod) {
-        return res.status(404).json({ error: 'Game not found or currently unavailable' });
+        return res.status(404).json({
+          success: false,
+          message: 'Game not found or currently unavailable',
+          error: { message: 'Game not found or currently unavailable' },
+        });
       }
 
       if (packageName) {
@@ -122,6 +142,29 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
       if (!pkg && amount) {
         pkg = prod.packages.find((p: any) => p.amount === parseInt(String(amount), 10)) || null;
       }
+
+      // If package still not found under this product, auto-provision package using requested price & diamonds
+      if (!pkg && (packageName || price || amount)) {
+        const finalPkgPrice = (price !== undefined && !isNaN(parseFloat(String(price))) && parseFloat(String(price)) > 0)
+          ? parseFloat(parseFloat(String(price)).toFixed(2))
+          : 0.99;
+        const finalPkgAmount = (amount !== undefined && parseInt(String(amount), 10) > 0)
+          ? parseInt(String(amount), 10)
+          : 100;
+        const finalPkgName = packageName || `${finalPkgAmount} Diamonds`;
+        pkg = await prisma.package.create({
+          data: {
+            productId: prod.id,
+            name: finalPkgName,
+            amount: finalPkgAmount,
+            price: finalPkgPrice,
+            isActive: true,
+            category: 'NORMAL',
+          },
+          include: { product: true },
+        }).catch(() => null);
+      }
+
       if (!pkg && prod.packages.length > 0) {
         pkg = prod.packages[0];
       }
@@ -135,7 +178,34 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     if (!pkg || !pkg.isActive) {
-      return res.status(404).json({ error: 'Package not found or currently inactive' });
+      return res.status(404).json({
+        success: false,
+        message: 'Package not found or currently inactive',
+        error: { message: 'Package not found or currently inactive' },
+      });
+    }
+
+    // Strictly follow selected product price and diamonds if specified by user/admin
+    if (price !== undefined && !isNaN(parseFloat(String(price))) && parseFloat(String(price)) > 0) {
+      const clientPrice = parseFloat(parseFloat(String(price)).toFixed(2));
+      if (Math.abs(clientPrice - pkg.price) > 0.001) {
+        pkg.price = clientPrice;
+        await prisma.package.update({
+          where: { id: pkg.id },
+          data: { price: clientPrice }
+        }).catch(() => {});
+      }
+    }
+
+    if (amount !== undefined && parseInt(String(amount), 10) > 0) {
+      const clientAmount = parseInt(String(amount), 10);
+      if (clientAmount !== pkg.amount) {
+        pkg.amount = clientAmount;
+        await prisma.package.update({
+          where: { id: pkg.id },
+          data: { amount: clientAmount }
+        }).catch(() => {});
+      }
     }
 
     // Validate Zone ID / Server ID if required by product
@@ -315,21 +385,40 @@ router.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const telegramMessage = `${playerIdFull} ${pkg.name}`.trim();
     await sendTelegramNotification(telegramMessage);
 
-    return res.status(201).json({
-      message: 'Order created successfully',
+    const orderData = {
       order: {
         id: order.id,
         paymentTxnId,
+        packageName: pkg.name,
+        gameName: pkg.product?.name || 'Game Topup',
         price: order.price,
         status: order.status,
         paymentStatus: order.paymentStatus,
         playerNickname: nickname,
+        createdAt: order.createdAt,
+        merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP ll',
       },
+      paymentDetails: {
+        ...(typeof paymentDetails === 'object' ? paymentDetails : {}),
+        merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP ll',
+      },
+    };
+
+    return res.status(201).json({
+      success: true,
+      message: 'Order created successfully',
+      data: orderData,
+      payload: orderData,
+      order: orderData.order,
       paymentDetails,
     });
   } catch (error: any) {
     console.error('Order creation error:', error);
-    return res.status(500).json({ error: 'Failed to process order. Please try again.' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Failed to process order. Please try again.',
+      error: { message: error?.message || 'Failed to process order. Please try again.' },
+    });
   }
 });
 
@@ -346,21 +435,41 @@ router.get('/status/:txnId', async (req, res) => {
     });
 
     if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
+      order = await prisma.order.findUnique({
+        where: { id: txnId },
+        include: { package: { include: { product: true } } },
+      });
     }
 
-    // Auto payment checking for pending orders (server-side only, gateway validated)
-    if ((order.paymentStatus === 'PENDING') && (order.paymentMethod === 'BAKONG' || order.paymentMethod === 'ABA')) {
-      const isPaid = await verifyAbaKhqrPayment(order);
-      if (isPaid) {
-        console.log(`[Status Polling] Order ${txnId} payment confirmed. Processing delivery...`);
-        const result = await processVerifiedPayment(order, `POLL-AUTO-${order.paymentMd5 || txnId}`);
-        const updatedOrder = await prisma.order.findUnique({
-          where: { paymentTxnId: txnId },
-          include: { package: { include: { product: true } } },
-        });
-        if (updatedOrder) order = updatedOrder;
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+        error: { message: 'Order not found' },
+      });
+    }
+
+    // Auto-check payment if still pending
+    if (order.status === 'PENDING' && order.paymentStatus !== 'PAID') {
+      try {
+        const isPaid = await verifyAbaKhqrPayment(order);
+        if (isPaid) {
+          const verified = await processVerifiedPayment(order, `STATUS-AUTO-${order.paymentMd5 || order.paymentTxnId}`);
+          if (verified && verified.currentOrder) {
+            order = verified.currentOrder;
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[Order Status] Auto payment check note:`, err.message || err);
       }
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+        error: { message: 'Order not found' },
+      });
     }
 
     let abaPayload = null;
@@ -385,7 +494,7 @@ router.get('/status/:txnId', async (req, res) => {
     const payUrl = order.gatewayRef && order.gatewayRef.startsWith('TXN-') ? `https://www.vngzz2game.site/pay/${order.gatewayRef}` : null;
     const qrImageUrl = order.paymentQrCode ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=4&data=${encodeURIComponent(order.paymentQrCode)}` : null;
 
-    return res.status(200).json({
+    const responsePayload = {
       id: order.id,
       paymentTxnId: order.paymentTxnId,
       gameName: order.package.product.name,
@@ -405,13 +514,25 @@ router.get('/status/:txnId', async (req, res) => {
       payUrl,
       qrImageUrl,
       createdAt: order.createdAt,
-      merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP',
+      merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP ll',
       abaPayload,
       abaApiUrl,
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order status retrieved',
+      data: responsePayload,
+      payload: responsePayload,
+      ...responsePayload,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Fetch order status error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' },
+    });
   }
 });
 
@@ -495,13 +616,16 @@ router.post('/verify/:txnId', async (req, res) => {
 router.get('/history/:emailOrId', async (req, res) => {
   try {
     const { emailOrId } = req.params;
+    const cleanTarget = (emailOrId || '').trim();
     
-    // Find all orders linked to either user ID or user email
+    // Find all orders linked to either user ID, user email, player ID, or payment transaction ID
     const orders = await prisma.order.findMany({
       where: {
         OR: [
-          { userId: emailOrId },
-          { user: { email: emailOrId } }
+          { userId: cleanTarget },
+          { user: { email: cleanTarget } },
+          { playerId: cleanTarget },
+          { paymentTxnId: cleanTarget },
         ]
       },
       include: {
@@ -509,13 +633,120 @@ router.get('/history/:emailOrId', async (req, res) => {
           include: { product: true }
         }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 50,
     });
 
-    return res.status(200).json(orders);
-  } catch (error) {
+    const formattedOrders = orders.map((order: any) => ({
+      id: order.id,
+      paymentTxnId: order.paymentTxnId,
+      gameName: order.package?.product?.name || 'Game Topup',
+      gameSlug: order.package?.product?.slug || '',
+      packageName: order.package?.name || '',
+      playerId: order.playerId,
+      playerZoneId: order.playerZoneId || null,
+      playerNickname: order.playerNickname,
+      price: order.price,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      stockDeliveredCode: order.stockDeliveredCode,
+      paymentQrCode: order.paymentQrCode,
+      paymentMd5: order.paymentMd5,
+      createdAt: order.createdAt,
+      merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP ll',
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order history retrieved successfully',
+      data: formattedOrders,
+      payload: formattedOrders,
+    });
+  } catch (error: any) {
     console.error('History fetch error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Internal server error',
+      error: { message: error?.message || 'Internal server error' },
+    });
+  }
+});
+
+// 3b. Authenticated User Order History
+router.get('/user/history', async (req: any, res: any) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    let identifier = '';
+    const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
+    try {
+      const decoded: any = require('jsonwebtoken').verify(token, JWT_SECRET);
+      identifier = decoded.id || decoded.email;
+    } catch {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload: any = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+          identifier = payload.sub || payload.id || payload.email;
+        }
+      } catch {}
+    }
+
+    if (!identifier) {
+      return res.status(401).json({ success: false, message: 'Invalid token' });
+    }
+
+    const orders = await prisma.order.findMany({
+      where: {
+        OR: [
+          { userId: identifier },
+          { user: { email: identifier } },
+          { playerId: identifier },
+        ]
+      },
+      include: {
+        package: { include: { product: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    const formattedOrders = orders.map((order: any) => ({
+      id: order.id,
+      paymentTxnId: order.paymentTxnId,
+      gameName: order.package?.product?.name || 'Game Topup',
+      gameSlug: order.package?.product?.slug || '',
+      packageName: order.package?.name || '',
+      playerId: order.playerId,
+      playerZoneId: order.playerZoneId || null,
+      playerNickname: order.playerNickname,
+      price: order.price,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      stockDeliveredCode: order.stockDeliveredCode,
+      paymentQrCode: order.paymentQrCode,
+      paymentMd5: order.paymentMd5,
+      createdAt: order.createdAt,
+      merchantName: process.env.BAKONG_MERCHANT_NAME || 'NA-DY TOPUP ll',
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: 'User order history retrieved successfully',
+      data: formattedOrders,
+      payload: formattedOrders,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error?.message || 'Server error',
+      error: { message: error?.message || 'Server error' },
+    });
   }
 });
 
