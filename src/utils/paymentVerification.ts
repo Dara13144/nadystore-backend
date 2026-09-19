@@ -39,7 +39,7 @@ export async function verifyAbaKhqrPayment(order: any): Promise<boolean> {
   }
 
   const rawVngKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY;
-  const vngzzApiKey = (rawVngKey && rawVngKey !== 'your-provider-api-key') ? rawVngKey : 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+  const vngzzApiKey = (rawVngKey && rawVngKey !== 'your-provider-api-key') ? rawVngKey : 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
   const targetTxn = order.gatewayRef || order.paymentTxnId;
   if (vngzzApiKey && targetTxn && (targetTxn.startsWith('TXN-') || targetTxn.startsWith('TOPUP-'))) {
     try {

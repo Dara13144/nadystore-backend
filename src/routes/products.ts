@@ -141,9 +141,10 @@ router.get(['/stock2/categories', '/game2/categories'], async (_req: Request, re
     return res.status(200).json({ status: 'SUCCESS', count: stock2CategoriesCache.length, categories: stock2CategoriesCache });
   }
 
-  const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+  const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
+  const game2Url = process.env.VNGZZ2GAME_GAME2_URL || 'https://www.vngzz2game.site/api/v1/game2';
   try {
-    const upstreamRes = await fetch('https://www.vngzz2game.site/api/v1/game2/categories', {
+    const upstreamRes = await fetch(`${game2Url}/categories`, {
       headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
       signal: AbortSignal.timeout(8000),
     });
@@ -207,10 +208,11 @@ router.get('/:slug', async (req: Request, res: Response) => {
     if (!product) {
       // Check if it is a Stock 2 game!
       const cleanCode = slug.replace(/^(stock2-|game2-)/i, '').trim();
-      const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+      const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
+      const game2Url = process.env.VNGZZ2GAME_GAME2_URL || 'https://www.vngzz2game.site/api/v1/game2';
       
       try {
-        const stock2Res = await fetch(`https://www.vngzz2game.site/api/v1/game2/products?game_code=${encodeURIComponent(cleanCode)}`, {
+        const stock2Res = await fetch(`${game2Url}/products?game_code=${encodeURIComponent(cleanCode)}`, {
           headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
           signal: AbortSignal.timeout(7000),
         });

@@ -15,12 +15,12 @@ export interface ApiSettings {
 }
 
 export const DEFAULT_API_SETTINGS: ApiSettings = {
-  providerApiKey: process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ',
+  providerApiKey: process.env.VNGZZ2GAME_API_KEY || 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m',
   providerStock1Url: process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-  providerStock2Url: process.env.VNGZZ2GAME_GAME2_URL || 'https://www.vngzz2game.site/api/v1/game2',
-  providerV2Url: 'https://www.vngzz2game.site/api/v2/game',
-  providerActiveStock: 2,
-  providerActiveUrl: 'https://www.vngzz2game.site/api/v1/game2',
+  providerStock2Url: process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
+  providerV2Url: '',
+  providerActiveStock: 1,
+  providerActiveUrl: 'https://www.vngzz2game.site/api/v1/game',
   providerAutoDelivery: true,
   bakongMerchantName: 'NA-DY TOPUP ll',
   bakongAccountId: process.env.BAKONG_ACCOUNT_ID || 'dara_khqr@aba',
@@ -59,7 +59,7 @@ export async function getDynamicApiSettings(forceRefresh = false): Promise<ApiSe
     const map = new Map<string, string>();
     rows.forEach((r) => map.set(r.key, r.value));
 
-    const activeStock = (map.get('PROVIDER_ACTIVE_STOCK') === '1' ? 1 : 2) as 1 | 2;
+    const activeStock = (map.get('PROVIDER_ACTIVE_STOCK') === '2' ? 2 : 1) as 1 | 2;
     const stock1 = map.get('PROVIDER_STOCK1_URL') || DEFAULT_API_SETTINGS.providerStock1Url;
     const stock2 = map.get('PROVIDER_STOCK2_URL') || DEFAULT_API_SETTINGS.providerStock2Url;
     const v2 = map.get('PROVIDER_V2_URL') || DEFAULT_API_SETTINGS.providerV2Url;
@@ -165,15 +165,24 @@ export function getDynamicApiKeySync(): string {
 
 export function getDynamicStockBasesSync(reqPath?: string): string[] {
   const bases: string[] = [];
-  const activeUrl = cachedSettings.providerActiveUrl;
-  if (activeUrl) bases.push(activeUrl);
 
-  if (reqPath && (reqPath.includes('game2') || cachedSettings.providerActiveStock === 2)) {
-    bases.push(cachedSettings.providerStock2Url);
-    bases.push(cachedSettings.providerStock1Url);
+  const stock1 = cachedSettings.providerStock1Url || process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game';
+  const stock2 = cachedSettings.providerStock2Url || process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game';
+
+  if (reqPath && reqPath.includes('game2')) {
+    bases.push(stock2);
+    bases.push(stock1);
+  } else if (reqPath && (reqPath.includes('/game/') || reqPath.endsWith('/game'))) {
+    bases.push(stock1);
+    bases.push(stock2);
   } else {
-    bases.push(cachedSettings.providerStock1Url);
-    bases.push(cachedSettings.providerStock2Url);
+    if (cachedSettings.providerActiveStock === 2) {
+      bases.push(stock2);
+      bases.push(stock1);
+    } else {
+      bases.push(stock1);
+      bases.push(stock2);
+    }
   }
 
   if (cachedSettings.providerV2Url) {

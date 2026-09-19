@@ -233,9 +233,7 @@ async function vngzz2gameLookup(
   const apiKey = getVngzzApiKey();
   const candidateBases = [
     process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-    process.env.VNGZZ2GAME_GAME2_URL || 'https://www.vngzz2game.site/api/v1/game2',
     'https://www.vngzz2game.site/api/v1/game',
-    'https://www.vngzz2game.site/api/v1/game2',
   ];
   const uniqueBases = Array.from(new Set(candidateBases));
 
@@ -251,7 +249,7 @@ async function vngzz2gameLookup(
       gameCodesToTry.push('freefire_sgmy', 'freefire_kh', 'freefire_global', 'ff');
     }
   } else if (isMLBB) {
-    gameCodesToTry.push('mlbb_special', 'mobile_legends', 'mlbb', 'ml');
+    gameCodesToTry.push('mlbb_special', 'mlbb_exclusive', 'mobile_legends', 'mlbb', 'ml');
   } else if (slugLower.includes('pubg')) {
     gameCodesToTry.push('pubgm');
   } else if (slugLower.includes('honor-of-kings') || slugLower.includes('hok')) {
@@ -791,18 +789,18 @@ export function resolveLiveProductCode(gameSlug: string, packageName: string, am
       return 'FREEFIRE_GLOBAL_6160';
     }
 
-    if (amt <= 30) return 'FREEFIRE_SGMY_25';
-    if (amt <= 70) return 'FREEFIRE_SGMY_25';
-    if (amt <= 150) return 'FREEFIRE_SGMY_100';
-    if (amt <= 250) return 'FREEFIRE_SGMY_100';
-    if (amt <= 350) return 'FREEFIRE_SGMY_310';
-    if (amt <= 450) return 'FREEFIRE_SGMY_310';
-    if (amt <= 600) return 'FREEFIRE_SGMY_520';
-    if (amt <= 800) return 'FREEFIRE_SGMY_520';
-    if (amt <= 1200) return 'FREEFIRE_SGMY_1060';
-    if (amt <= 2500) return 'FREEFIRE_SGMY_2180';
-    if (amt <= 6000) return 'FREEFIRE_SGMY_5600';
-    return 'FREEFIRE_SGMY_11500';
+    if (amt <= 30) return 'FREEFIRE_SG_25';
+    if (amt <= 70) return 'FREEFIRE_SG_25';
+    if (amt <= 150) return 'FREEFIRE_SG_100';
+    if (amt <= 250) return 'FREEFIRE_SG_100';
+    if (amt <= 350) return 'FREEFIRE_SG_310';
+    if (amt <= 450) return 'FREEFIRE_SG_310';
+    if (amt <= 600) return 'FREEFIRE_SG_520';
+    if (amt <= 800) return 'FREEFIRE_SG_520';
+    if (amt <= 1200) return 'FREEFIRE_SG_1060';
+    if (amt <= 2500) return 'FREEFIRE_SG_2180';
+    if (amt <= 6000) return 'FREEFIRE_SG_5600';
+    return 'FREEFIRE_SG_11500';
   }
 
   // 2. Mobile Legends: Bang Bang

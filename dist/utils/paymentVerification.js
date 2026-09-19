@@ -39,8 +39,8 @@ async function verifyAbaKhqrPayment(order) {
             return false;
         }
     }
-    // -- 1.4. Direct VNGZZ2GAME payment check --------------------------------
-    const vngzzApiKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+    const rawVngKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY;
+    const vngzzApiKey = (rawVngKey && rawVngKey !== 'your-provider-api-key') ? rawVngKey : 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
     const targetTxn = order.gatewayRef || order.paymentTxnId;
     if (vngzzApiKey && targetTxn && (targetTxn.startsWith('TXN-') || targetTxn.startsWith('TOPUP-'))) {
         try {

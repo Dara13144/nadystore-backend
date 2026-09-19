@@ -466,36 +466,54 @@ app.get(
   ['/api/v1/game/check_id', '/api/v1/game2/check_id', '/api/v2/game/check_id', '/api/provider/check-id'],
   generalApiLimiter,
   async (req: express.Request, res: express.Response) => {
-    const game = ((req.query.game || req.query.game_code || '') as string).trim();
+    const rawGame = ((req.query.game || req.query.game_code || '') as string).trim();
+    const game = rawGame;
     const userid = ((req.query.id || req.query.userid || req.query.user_id || req.query.game_user_id || req.query.playerId || '') as string).trim();
     const serverid = ((req.query.zone_id || req.query.server_id || req.query.serverid || req.query.serverId || req.query.playerZoneId || '') as string).trim();
 
-    if (!game || !userid) {
+    if (!rawGame || !userid) {
       return res.status(400).json({ success: false, status: 'FAILED', message: 'game and userid/id are required' });
     }
+
+    const candidateGameCodes: string[] = [rawGame];
+    const slugLower = rawGame.toLowerCase();
+    if (slugLower.includes('free-fire') || slugLower.includes('freefire')) {
+      candidateGameCodes.push('freefire_sgmy', 'freefire_kh', 'freefire_global', 'ff');
+    } else if (slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton')) {
+      candidateGameCodes.push('mlbb_special', 'mlbb_exclusive', 'mobile_legends', 'mlbb');
+    } else if (slugLower.includes('pubg')) {
+      candidateGameCodes.push('pubgm');
+    } else if (slugLower.includes('honor-of-kings') || slugLower.includes('hok')) {
+      candidateGameCodes.push('hok');
+    } else if (slugLower.includes('farlight')) {
+      candidateGameCodes.push('farlight84');
+    }
+    const uniqueGameCodes = Array.from(new Set(candidateGameCodes));
 
     const bases = getStockBases(req.originalUrl || req.path);
     const apiKey = getApiKey(req);
 
     // 1. Direct query to live upstream provider
     for (const stockBase of bases) {
-      try {
-        let upstreamUrl = `${stockBase}/check_id?game=${encodeURIComponent(game)}&game_code=${encodeURIComponent(game)}&userid=${encodeURIComponent(userid)}&game_user_id=${encodeURIComponent(userid)}&id=${encodeURIComponent(userid)}`;
-        if (serverid) {
-          upstreamUrl += `&zone_id=${encodeURIComponent(serverid)}&server_id=${encodeURIComponent(serverid)}&serverid=${encodeURIComponent(serverid)}`;
-        }
-        const upRes = await fetch(upstreamUrl, {
-          headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
-          signal: AbortSignal.timeout(6000),
-        });
-        if (upRes.ok) {
-          const data: any = await upRes.json();
-          if (data && (data.status === 'APPROVED' || data.valid === true || data.username)) {
-            return res.json(data);
+      for (const gameCode of uniqueGameCodes) {
+        try {
+          let upstreamUrl = `${stockBase}/check_id?game=${encodeURIComponent(gameCode)}&game_code=${encodeURIComponent(gameCode)}&userid=${encodeURIComponent(userid)}&game_user_id=${encodeURIComponent(userid)}&id=${encodeURIComponent(userid)}`;
+          if (serverid) {
+            upstreamUrl += `&zone_id=${encodeURIComponent(serverid)}&server_id=${encodeURIComponent(serverid)}&serverid=${encodeURIComponent(serverid)}`;
           }
+          const upRes = await fetch(upstreamUrl, {
+            headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (upRes.ok) {
+            const data: any = await upRes.json();
+            if (data && (data.status === 'APPROVED' || data.valid === true || data.username)) {
+              return res.json(data);
+            }
+          }
+        } catch (err: any) {
+          console.warn('[Check ID] Upstream provider query note on', stockBase, err.message);
         }
-      } catch (err: any) {
-        console.warn('[Check ID] Upstream provider query note on', stockBase, err.message);
       }
     }
 

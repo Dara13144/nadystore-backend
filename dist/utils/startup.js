@@ -154,9 +154,11 @@ async function initSupabasePostgres() {
     EXCEPTION
       WHEN others THEN null;
     END $$;`,
-        // Ensure Zone ID columns exist
+        // Ensure Zone ID and Check ID columns exist
         'ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "hasZoneId" BOOLEAN DEFAULT false;',
         'ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "zoneIdLabel" TEXT;',
+        'ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "hasCheckId" BOOLEAN DEFAULT true;',
+        'ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "checkIdGameCode" TEXT;',
         // RLS Policies & Grants for public and authenticated roles
         'ALTER TABLE "Product" ENABLE ROW LEVEL SECURITY;',
         'DROP POLICY IF EXISTS "Public Read Products" ON "Product";',
@@ -180,7 +182,7 @@ async function initSupabasePostgres() {
         'CREATE POLICY "Allow delete on Package" ON "Package" FOR DELETE TO anon, authenticated, service_role USING (true);',
         'DROP POLICY IF EXISTS "Allow service role all on AuditLog" ON "AuditLog";',
         'DROP VIEW IF EXISTS "games" CASCADE;',
-        `CREATE VIEW "games" AS SELECT id, name, slug, image, category, "isActive", "hasZoneId", "zoneIdLabel", "createdAt", "updatedAt" FROM "Product";`,
+        `CREATE VIEW "games" AS SELECT id, name, slug, image, category, "isActive", "hasZoneId", "zoneIdLabel", "hasCheckId", "checkIdGameCode", "createdAt", "updatedAt" FROM "Product";`,
         `CREATE OR REPLACE RULE games_delete AS ON DELETE TO "games" DO INSTEAD (DELETE FROM "Product" WHERE id = OLD.id);`,
         'GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;',
         'GRANT ALL ON "Product", "Package", "games" TO anon, authenticated, service_role;',
@@ -251,9 +253,9 @@ async function runDatabaseStartup() {
         }
         const productCount = await prisma_1.default.product.count();
         console.log(`[Startup] Found ${productCount} products in database.`);
-        // Ensure default administrator accounts exist
+        // Ensure default administrator account exists (EXCLUSIVELY mdara9695@gmail.com)
         const adminPassword = await bcryptjs_1.default.hash('admin123', 10);
-        const ADMIN_ACCOUNTS = ['admin@topup.com', 'mdara9695@gmail.com', 'admin@nadytopup.com', 'admin@gmail.com'];
+        const ADMIN_ACCOUNTS = ['mdara9695@gmail.com'];
         for (const email of ADMIN_ACCOUNTS) {
             const existing = await prisma_1.default.user.findUnique({ where: { email } });
             if (!existing) {
@@ -267,8 +269,19 @@ async function runDatabaseStartup() {
                     where: { email },
                     data: { role: 'ADMIN', password: adminPassword },
                 });
-                console.log(`[Startup] Updated/Confirmed ADMIN account: ${email}`);
+                console.log(`[Startup] Confirmed EXCLUSIVE ADMIN account: ${email}`);
             }
+        }
+        // Demote any other accounts that were previously ADMIN
+        const demoted = await prisma_1.default.user.updateMany({
+            where: {
+                email: { notIn: ADMIN_ACCOUNTS },
+                role: 'ADMIN',
+            },
+            data: { role: 'USER' },
+        });
+        if (demoted.count > 0) {
+            console.log(`[Startup] Demoted ${demoted.count} unauthorized admin accounts to USER.`);
         }
         // Games are managed exclusively by Admin via dashboard (NO auto-seed)
         console.log(`[Startup] Database catalog active with ${productCount} products. Games are added and managed exclusively via Admin Dashboard.`);

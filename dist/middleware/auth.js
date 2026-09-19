@@ -13,9 +13,6 @@ const prisma_1 = __importDefault(require("../prisma"));
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production-12345';
 exports.ADMIN_EMAILS = [
     'mdara9695@gmail.com',
-    'admin@nadytopup.com',
-    'admin@topup.com',
-    'admin@gmail.com',
 ];
 /**
  * Universal token extractor: checks Bearer header, raw header, custom headers, cookies, and query
@@ -128,7 +125,7 @@ async function authenticateJWT(req, res, next) {
 function requireAdmin(req, res, next) {
     const email = (req.user?.email || '').trim().toLowerCase();
     const isAdminEmail = exports.ADMIN_EMAILS.includes(email);
-    if (!req.user || (!isAdminEmail && req.user.role !== 'ADMIN')) {
+    if (!req.user || !isAdminEmail) {
         // ✅ OWASP A01: Log permission denied for admin routes
         console.warn(`[SECURITY] [WARN] [${new Date().toISOString()}] PERMISSION_DENIED ${JSON.stringify({
             userId: req.user?.id || 'unauthenticated',
@@ -137,7 +134,7 @@ function requireAdmin(req, res, next) {
             action: `${req.method} ${req.originalUrl}`,
             ip: req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
         })}`);
-        return res.status(403).json({ error: 'Forbidden: Admin access required' });
+        return res.status(403).json({ error: 'Forbidden: Admin access required (Authorized for mdara9695@gmail.com only)' });
     }
     // Ensure role is explicitly set to ADMIN
     req.user.role = 'ADMIN';

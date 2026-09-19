@@ -154,6 +154,48 @@ app.options('*', (0, cors_1.default)(corsOptions));
 // ─── 6. Body Parsing with Strict 1MB Limits ───────────────────────────────────
 app.use(express_1.default.json({ limit: '1mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '1mb' }));
+// ─── 6b. Development API Request Debugging Middleware ─────────────────────────
+const sanitizeLogData = (data) => {
+    if (!data || typeof data !== 'object')
+        return data;
+    if (Array.isArray(data))
+        return data.map(sanitizeLogData);
+    const sensitiveKeys = ['password', 'currentpassword', 'newpassword', 'token', 'secret', 'jwt_secret', 'service_role_key', 'apikey', 'authorization', 'credential', 'privatekey', 'hash'];
+    const sanitized = {};
+    for (const [key, val] of Object.entries(data)) {
+        if (sensitiveKeys.some((s) => key.toLowerCase().includes(s))) {
+            sanitized[key] = '[REDACTED]';
+        }
+        else if (typeof val === 'object' && val !== null) {
+            sanitized[key] = sanitizeLogData(val);
+        }
+        else {
+            sanitized[key] = val;
+        }
+    }
+    return sanitized;
+};
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        const reqPath = req.originalUrl || req.url;
+        if (!reqPath.startsWith('/uploads') && req.method !== 'OPTIONS') {
+            console.log('========== API REQUEST ==========');
+            console.log('METHOD:', req.method);
+            console.log('URL:', reqPath);
+            if (req.body && Object.keys(req.body).length > 0) {
+                console.log('BODY:', sanitizeLogData(req.body));
+            }
+            if (req.query && Object.keys(req.query).length > 0) {
+                console.log('QUERY:', sanitizeLogData(req.query));
+            }
+            if (req.params && Object.keys(req.params).length > 0) {
+                console.log('PARAMS:', sanitizeLogData(req.params));
+            }
+            console.log('=================================');
+        }
+        next();
+    });
+}
 // ─── 7. Professional Anti-DDoS & WAF Protection System ────────────────────────
 app.use(securityMiddleware_1.default);
 // ─── Static Files ─────────────────────────────────────────────────────────────
@@ -291,25 +333,16 @@ app.use('/webhooks/cutluy', webhook_1.default);
 app.use('/api/webhooks/cutluy', webhook_1.default);
 // ─── VNGZZ2GAME Provider Routes (/api/v1/game/*, /api/v1/game2/*, /api/v2/game/*, /api/provider/*) ──
 const gameProviderMock_1 = require("./utils/gameProviderMock");
+const apiConfig_1 = require("./utils/apiConfig");
 const getStockBases = (reqPath) => {
-    if (reqPath.includes('game2')) {
-        return [
-            'https://www.vngzz2game.site/api/v1/game2',
-            'https://www.vngzz2game.site/api/v1/game',
-        ];
-    }
-    // For /api/v2/game or /api/v1/game, map to v1/game then v1/game2, with v2 env fallback
-    return [
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-    ];
+    return (0, apiConfig_1.getDynamicStockBasesSync)(reqPath);
 };
 const getApiKey = (req) => {
-    return (req.headers['x-api-key'] ||
-        req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
-        process.env.VNGZZ2GAME_API_KEY ||
-        'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ');
+    const reqKey = req.headers['x-api-key'] || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+    if (reqKey && reqKey !== 'your-provider-api-key' && reqKey !== 'default') {
+        return reqKey;
+    }
+    return (0, apiConfig_1.getDynamicApiKeySync)();
 };
 // 0. Root Gateway Info (/api/v2/game, /api/v1/game, /api/v1/game2, /api/provider)
 app.get(['/api/v2/game', '/api/v1/game', '/api/v1/game2', '/api/provider'], generalApiLimiter, async (req, res) => {
@@ -329,6 +362,23 @@ app.get(['/api/v2/game', '/api/v1/game', '/api/v1/game2', '/api/provider'], gene
             deposit: `/api/${version}/${sub}/deposit`,
         },
     });
+});
+// 0.1 Public Active API Settings (For Frontend lookup & status)
+app.get('/api/settings/public', generalApiLimiter, async (_req, res) => {
+    try {
+        const s = await (0, apiConfig_1.getDynamicApiSettings)();
+        return res.json({
+            success: true,
+            providerActiveUrl: s.providerActiveUrl,
+            providerActiveStock: s.providerActiveStock,
+            providerAutoDelivery: s.providerAutoDelivery,
+            bakongMerchantName: s.bakongMerchantName,
+            updatedAt: s.updatedAt,
+        });
+    }
+    catch (err) {
+        return res.status(500).json({ success: false, error: err.message });
+    }
 });
 // 1. Profile (Check reseller balance & statistics)
 app.get(['/api/v1/game/profile', '/api/v1/game2/profile', '/api/v2/game/profile', '/api/provider/profile'], generalApiLimiter, async (req, res) => {
@@ -361,34 +411,55 @@ app.get(['/api/v1/game/profile', '/api/v1/game2/profile', '/api/v2/game/profile'
 });
 // 2. Validate Player ID (Check ID)
 app.get(['/api/v1/game/check_id', '/api/v1/game2/check_id', '/api/v2/game/check_id', '/api/provider/check-id'], generalApiLimiter, async (req, res) => {
-    const game = (req.query.game || req.query.game_code || '').trim();
+    const rawGame = (req.query.game || req.query.game_code || '').trim();
+    const game = rawGame;
     const userid = (req.query.id || req.query.userid || req.query.user_id || req.query.game_user_id || req.query.playerId || '').trim();
     const serverid = (req.query.zone_id || req.query.server_id || req.query.serverid || req.query.serverId || req.query.playerZoneId || '').trim();
-    if (!game || !userid) {
+    if (!rawGame || !userid) {
         return res.status(400).json({ success: false, status: 'FAILED', message: 'game and userid/id are required' });
     }
+    const candidateGameCodes = [rawGame];
+    const slugLower = rawGame.toLowerCase();
+    if (slugLower.includes('free-fire') || slugLower.includes('freefire')) {
+        candidateGameCodes.push('freefire_sgmy', 'freefire_kh', 'freefire_global', 'ff');
+    }
+    else if (slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton')) {
+        candidateGameCodes.push('mlbb_special', 'mlbb_exclusive', 'mobile_legends', 'mlbb');
+    }
+    else if (slugLower.includes('pubg')) {
+        candidateGameCodes.push('pubgm');
+    }
+    else if (slugLower.includes('honor-of-kings') || slugLower.includes('hok')) {
+        candidateGameCodes.push('hok');
+    }
+    else if (slugLower.includes('farlight')) {
+        candidateGameCodes.push('farlight84');
+    }
+    const uniqueGameCodes = Array.from(new Set(candidateGameCodes));
     const bases = getStockBases(req.originalUrl || req.path);
     const apiKey = getApiKey(req);
     // 1. Direct query to live upstream provider
     for (const stockBase of bases) {
-        try {
-            let upstreamUrl = `${stockBase}/check_id?game=${encodeURIComponent(game)}&game_code=${encodeURIComponent(game)}&userid=${encodeURIComponent(userid)}&game_user_id=${encodeURIComponent(userid)}&id=${encodeURIComponent(userid)}`;
-            if (serverid) {
-                upstreamUrl += `&zone_id=${encodeURIComponent(serverid)}&server_id=${encodeURIComponent(serverid)}&serverid=${encodeURIComponent(serverid)}`;
-            }
-            const upRes = await fetch(upstreamUrl, {
-                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
-                signal: AbortSignal.timeout(6000),
-            });
-            if (upRes.ok) {
-                const data = await upRes.json();
-                if (data && (data.status === 'APPROVED' || data.valid === true || data.username)) {
-                    return res.json(data);
+        for (const gameCode of uniqueGameCodes) {
+            try {
+                let upstreamUrl = `${stockBase}/check_id?game=${encodeURIComponent(gameCode)}&game_code=${encodeURIComponent(gameCode)}&userid=${encodeURIComponent(userid)}&game_user_id=${encodeURIComponent(userid)}&id=${encodeURIComponent(userid)}`;
+                if (serverid) {
+                    upstreamUrl += `&zone_id=${encodeURIComponent(serverid)}&server_id=${encodeURIComponent(serverid)}&serverid=${encodeURIComponent(serverid)}`;
+                }
+                const upRes = await fetch(upstreamUrl, {
+                    headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' },
+                    signal: AbortSignal.timeout(6000),
+                });
+                if (upRes.ok) {
+                    const data = await upRes.json();
+                    if (data && (data.status === 'APPROVED' || data.valid === true || data.username)) {
+                        return res.json(data);
+                    }
                 }
             }
-        }
-        catch (err) {
-            console.warn('[Check ID] Upstream provider query note on', stockBase, err.message);
+            catch (err) {
+                console.warn('[Check ID] Upstream provider query note on', stockBase, err.message);
+            }
         }
     }
     // 2. Fallback to our robust multi-provider lookup
@@ -642,7 +713,7 @@ app.use((err, req, res, next) => {
     });
 });
 // ─── BACKGROUND PAYMENT SWEEPER ───────────────────────────────────────────────
-const SWEEP_INTERVAL_MS = 30_000; // 30 seconds
+const SWEEP_INTERVAL_MS = 5_000; // 5 seconds continuous auto-check
 let sweepRunning = false;
 async function runPaymentSweep() {
     if (sweepRunning)

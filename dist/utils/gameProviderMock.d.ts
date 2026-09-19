@@ -13,6 +13,8 @@ export interface DeliveryResult {
     referenceId: string;
     error?: string;
 }
+export declare function getVngzzApiKey(): string;
+export declare function getCandidateBases(): string[];
 export declare function lookupPlayerNickname(gameSlug: string, playerId: string, playerZoneId?: string): Promise<LookupResult>;
 export declare function resolveLiveProductCode(gameSlug: string, packageName: string, amount?: number): string | null;
 export declare function deliverTopup(gameSlug: string, playerId: string, playerZoneId: string | null, packageName: string, price: number, orderTxnId?: string, productCode?: string, packageAmount?: number): Promise<DeliveryResult>;

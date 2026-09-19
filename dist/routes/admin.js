@@ -40,6 +40,7 @@ const express_1 = require("express");
 const prisma_1 = __importDefault(require("../prisma"));
 const auth_1 = require("../middleware/auth");
 const supabase_1 = require("../lib/supabase");
+const apiConfig_1 = require("../utils/apiConfig");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const multer_1 = __importDefault(require("multer"));
@@ -101,11 +102,20 @@ router.get('/products', async (req, res) => {
             },
             orderBy: { name: 'asc' },
         });
-        return res.status(200).json(products);
+        return res.status(200).json({
+            success: true,
+            message: 'Admin products retrieved',
+            data: products,
+            payload: products,
+        });
     }
     catch (error) {
         console.error('Error fetching admin products:', error);
-        return res.status(500).json({ error: 'Database error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Database error',
+            error: { message: error?.message || 'Database error' },
+        });
     }
 });
 // 0.2 Admin authoritative Product delete (Cascades child records, verifies deletion, broadcasts Realtime)
@@ -268,7 +278,7 @@ router.get('/stats', async (req, res) => {
             }
         }
         const popularity = Array.from(popMap.values()).sort((a, b) => b.salesCount - a.salesCount);
-        return res.status(200).json({
+        const statsData = {
             metrics: {
                 totalRevenue: revenueSum._sum.price || 0,
                 totalOrders: totalOrdersCount,
@@ -278,11 +288,22 @@ router.get('/stats', async (req, res) => {
             },
             recentOrders,
             popularity,
+        };
+        return res.status(200).json({
+            success: true,
+            message: 'Admin metrics retrieved',
+            data: statsData,
+            payload: statsData,
+            ...statsData,
         });
     }
     catch (error) {
         console.error('Admin metrics error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error',
+            error: { message: error?.message || 'Internal server error' },
+        });
     }
 });
 // 2. Fetch all orders (Paginated / Filterable)
@@ -326,11 +347,20 @@ router.get('/orders', async (req, res) => {
             },
             orderBy: { createdAt: 'desc' },
         });
-        return res.status(200).json(orders);
+        return res.status(200).json({
+            success: true,
+            message: 'Admin orders retrieved',
+            data: orders,
+            payload: orders,
+        });
     }
     catch (error) {
         console.error('Admin fetch orders error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error',
+            error: { message: error?.message || 'Internal server error' },
+        });
     }
 });
 // 3. Manually edit order status (override for manual checks)
@@ -508,7 +538,7 @@ router.post('/stock', async (req, res) => {
 // 6. Product management: Add a new game product
 router.post('/products', async (req, res) => {
     try {
-        const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel } = req.body;
+        const { name, category, image, slug: customSlug, packages, autoSeedPackages, hasZoneId, zoneIdLabel, hasCheckId, checkIdGameCode } = req.body;
         if (!name || !category) {
             return res.status(400).json({ error: 'Product name and category are required' });
         }
@@ -534,6 +564,8 @@ router.post('/products', async (req, res) => {
                 isActive: true,
                 hasZoneId: hasZoneId === true || hasZoneId === 'true',
                 zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
+                hasCheckId: hasCheckId === undefined ? true : (hasCheckId === true || hasCheckId === 'true'),
+                checkIdGameCode: checkIdGameCode ? String(checkIdGameCode).trim() : null,
             },
         });
         // Auto-create default packages if packages array not passed or empty
@@ -651,7 +683,7 @@ router.post('/products/:productId/packages', async (req, res) => {
 router.patch(['/products/:id', '/product/:id'], async (req, res) => {
     try {
         const { id } = req.params;
-        const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel } = req.body;
+        const { image, name, category, isActive, slug, hasZoneId, zoneIdLabel, hasCheckId, checkIdGameCode } = req.body;
         let existingProduct = await prisma_1.default.product.findFirst({
             where: { OR: [{ id }, { slug: id }] },
         });
@@ -670,6 +702,10 @@ router.patch(['/products/:id', '/product/:id'], async (req, res) => {
             data.hasZoneId = hasZoneId === true || hasZoneId === 'true';
         if (zoneIdLabel !== undefined)
             data.zoneIdLabel = zoneIdLabel ? String(zoneIdLabel).trim() : null;
+        if (hasCheckId !== undefined)
+            data.hasCheckId = hasCheckId === true || hasCheckId === 'true';
+        if (checkIdGameCode !== undefined)
+            data.checkIdGameCode = checkIdGameCode ? String(checkIdGameCode).trim() : null;
         let updated;
         if (existingProduct) {
             updated = await prisma_1.default.product.update({ where: { id: existingProduct.id }, data });
@@ -686,6 +722,8 @@ router.patch(['/products/:id', '/product/:id'], async (req, res) => {
                     isActive: isActive !== undefined ? isActive : true,
                     hasZoneId: hasZoneId === true || hasZoneId === 'true',
                     zoneIdLabel: zoneIdLabel ? String(zoneIdLabel).trim() : null,
+                    hasCheckId: hasCheckId === undefined ? true : (hasCheckId === true || hasCheckId === 'true'),
+                    checkIdGameCode: checkIdGameCode ? String(checkIdGameCode).trim() : null,
                 },
             });
             console.log(`[Admin Dashboard] Created missing product during update: ${updated.name}`);
@@ -1230,6 +1268,95 @@ router.delete('/contact/:id', async (req, res) => {
     catch (error) {
         console.error('Admin delete contact message error:', error);
         return res.status(500).json({ error: 'Failed to delete contact message' });
+    }
+});
+// ─── API & PROVIDER SETTINGS MANAGEMENT ──────────────────────────
+router.get('/settings/api', async (req, res) => {
+    try {
+        const settings = await (0, apiConfig_1.getDynamicApiSettings)(true);
+        return res.status(200).json({
+            success: true,
+            settings,
+            presets: [
+                {
+                    name: 'VNGZZ Stock 2 (Recommended)',
+                    url: 'https://www.vngzz2game.site/api/v1/game2',
+                    stock: 2,
+                    description: 'Official Moonton & 150+ games direct topup with live ABA KHQR',
+                },
+                {
+                    name: 'VNGZZ Stock 1',
+                    url: 'https://www.vngzz2game.site/api/v1/game',
+                    stock: 1,
+                    description: 'Alternative catalog stock & regional games',
+                },
+                {
+                    name: 'VNGZZ API v2 Gateway',
+                    url: 'https://www.vngzz2game.site/api/v2/game',
+                    stock: 2,
+                    description: 'Next-generation V2 API endpoint',
+                },
+            ],
+        });
+    }
+    catch (error) {
+        console.error('Admin get API settings error:', error);
+        return res.status(500).json({ success: false, error: 'Failed to fetch API settings' });
+    }
+});
+router.post('/settings/api', async (req, res) => {
+    try {
+        const { providerApiKey, providerStock1Url, providerStock2Url, providerV2Url, providerActiveStock, providerActiveUrl, providerAutoDelivery, bakongMerchantName, bakongAccountId, } = req.body;
+        const updated = await (0, apiConfig_1.saveDynamicApiSettings)({
+            ...(providerApiKey !== undefined ? { providerApiKey: providerApiKey.trim() } : {}),
+            ...(providerStock1Url !== undefined ? { providerStock1Url: providerStock1Url.trim() } : {}),
+            ...(providerStock2Url !== undefined ? { providerStock2Url: providerStock2Url.trim() } : {}),
+            ...(providerV2Url !== undefined ? { providerV2Url: providerV2Url.trim() } : {}),
+            ...(providerActiveStock !== undefined ? { providerActiveStock: Number(providerActiveStock) } : {}),
+            ...(providerActiveUrl !== undefined ? { providerActiveUrl: providerActiveUrl.trim() } : {}),
+            ...(providerAutoDelivery !== undefined ? { providerAutoDelivery: Boolean(providerAutoDelivery) } : {}),
+            ...(bakongMerchantName !== undefined ? { bakongMerchantName: bakongMerchantName.trim() } : {}),
+            ...(bakongAccountId !== undefined ? { bakongAccountId: bakongAccountId.trim() } : {}),
+        });
+        return res.status(200).json({
+            success: true,
+            message: 'API settings updated and applied across all website systems successfully!',
+            settings: updated,
+        });
+    }
+    catch (error) {
+        console.error('Admin update API settings error:', error);
+        return res.status(500).json({ success: false, error: 'Failed to save API settings' });
+    }
+});
+router.post('/settings/api/test', async (req, res) => {
+    try {
+        const { providerApiKey, providerActiveUrl } = req.body;
+        const result = await (0, apiConfig_1.testProviderConnection)(providerApiKey, providerActiveUrl);
+        return res.status(200).json(result);
+    }
+    catch (error) {
+        console.error('Admin test API error:', error);
+        return res.status(500).json({
+            success: false,
+            status: 500,
+            latencyMs: 0,
+            message: error.message || 'Test failed',
+        });
+    }
+});
+router.post('/settings/api/reset', async (req, res) => {
+    try {
+        const reset = await (0, apiConfig_1.resetDynamicApiSettings)();
+        return res.status(200).json({
+            success: true,
+            message: 'API settings restored to factory defaults.',
+            settings: reset,
+        });
+    }
+    catch (error) {
+        console.error('Admin reset API settings error:', error);
+        return res.status(500).json({ success: false, error: 'Failed to reset settings' });
     }
 });
 exports.default = router;

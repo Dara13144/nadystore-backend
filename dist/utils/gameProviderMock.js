@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getVngzzApiKey = getVngzzApiKey;
+exports.getCandidateBases = getCandidateBases;
 exports.lookupPlayerNickname = lookupPlayerNickname;
 exports.resolveLiveProductCode = resolveLiveProductCode;
 exports.deliverTopup = deliverTopup;
@@ -8,6 +10,13 @@ exports.fetchProviderProfile = fetchProviderProfile;
 exports.fetchProviderCategories = fetchProviderCategories;
 exports.fetchProviderProducts = fetchProviderProducts;
 exports.depositProviderBalance = depositProviderBalance;
+const apiConfig_1 = require("./apiConfig");
+function getVngzzApiKey() {
+    return (0, apiConfig_1.getDynamicApiKeySync)();
+}
+function getCandidateBases() {
+    return (0, apiConfig_1.getDynamicStockBasesSync)();
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // SANDBOX ACCOUNTS: Pre-seeded test accounts for development & demo purposes.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,26 +205,26 @@ function sandboxLookup(gameSlug, playerId, playerZoneId) {
 // VNGZZ2GAME LIVE API (https://www.vngzz2game.site/api/v1/game)
 // ─────────────────────────────────────────────────────────────────────────────
 async function vngzz2gameLookup(gameSlug, playerId, playerZoneId) {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+    const apiKey = getVngzzApiKey();
     const candidateBases = [
         process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
         'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
     ];
+    const uniqueBases = Array.from(new Set(candidateBases));
     const slugLower = gameSlug.toLowerCase();
     const isFF = slugLower.includes('free-fire') || slugLower.includes('freefire');
     const isMLBB = slugLower.includes('mobile-legend') || slugLower.includes('mlbb') || slugLower.includes('moonton');
     const gameCodesToTry = [];
     if (isFF) {
         if (slugLower.includes('global')) {
-            gameCodesToTry.push('freefire_global', 'ff', 'freefire_sgmy');
+            gameCodesToTry.push('freefire_global', 'freefire_sgmy', 'freefire_kh', 'ff');
         }
         else {
-            gameCodesToTry.push('ff', 'freefire_sgmy', 'freefire_global');
+            gameCodesToTry.push('freefire_sgmy', 'freefire_kh', 'freefire_global', 'ff');
         }
     }
     else if (isMLBB) {
-        gameCodesToTry.push('ml', slugLower.includes('global') ? 'mlbb_global' : 'mlbb');
+        gameCodesToTry.push('mlbb_special', 'mlbb_exclusive', 'mobile_legends', 'mlbb', 'ml');
     }
     else if (slugLower.includes('pubg')) {
         gameCodesToTry.push('pubgm');
@@ -227,19 +236,22 @@ async function vngzz2gameLookup(gameSlug, playerId, playerZoneId) {
         gameCodesToTry.push('farlight84');
     }
     else if (slugLower.includes('blood-strike')) {
-        gameCodesToTry.push('blood_strike');
+        gameCodesToTry.push('bloodstrike', 'bloodstrikeme');
+    }
+    else if (slugLower.includes('valorant')) {
+        gameCodesToTry.push('valorant_kh', 'valorant_sg');
     }
     if (gameCodesToTry.length === 0 || !apiKey)
         return null;
     const cleanId = playerId.trim().replace(/[^\d]/g, '');
     const cleanZone = playerZoneId ? playerZoneId.trim().replace(/[^\d]/g, '') : '';
     const avatarUrl = isFF ? '/images/games/freefire.png' : (isMLBB ? '/images/games/mlbb.png' : `/images/games/${gameSlug}.png`);
-    for (const apiUrl of candidateBases) {
+    for (const apiUrl of uniqueBases) {
         for (const gameCode of gameCodesToTry) {
             try {
                 let url = `${apiUrl}/check_id?game_code=${gameCode}&game=${gameCode}&game_user_id=${encodeURIComponent(cleanId)}&id=${encodeURIComponent(cleanId)}&userid=${encodeURIComponent(cleanId)}`;
                 if (cleanZone) {
-                    url += `&zone_id=${encodeURIComponent(cleanZone)}&server_id=${encodeURIComponent(cleanZone)}&serverid=${encodeURIComponent(cleanZone)}`;
+                    url += `&zone_id=${encodeURIComponent(cleanZone)}&zoneid=${encodeURIComponent(cleanZone)}&server_id=${encodeURIComponent(cleanZone)}&serverid=${encodeURIComponent(cleanZone)}`;
                 }
                 console.log(`[Game Provider API] [VNGZZ2GAME] Querying check_id: ${url}`);
                 const controller = new AbortController();
@@ -699,28 +711,28 @@ function resolveLiveProductCode(gameSlug, packageName, amount) {
             return 'FREEFIRE_GLOBAL_6160';
         }
         if (amt <= 30)
-            return 'FREEFIRE_SGMY_25';
+            return 'FREEFIRE_SG_25';
         if (amt <= 70)
-            return 'FREEFIRE_SGMY_25';
+            return 'FREEFIRE_SG_25';
         if (amt <= 150)
-            return 'FREEFIRE_SGMY_100';
+            return 'FREEFIRE_SG_100';
         if (amt <= 250)
-            return 'FREEFIRE_SGMY_100';
+            return 'FREEFIRE_SG_100';
         if (amt <= 350)
-            return 'FREEFIRE_SGMY_310';
+            return 'FREEFIRE_SG_310';
         if (amt <= 450)
-            return 'FREEFIRE_SGMY_310';
+            return 'FREEFIRE_SG_310';
         if (amt <= 600)
-            return 'FREEFIRE_SGMY_520';
+            return 'FREEFIRE_SG_520';
         if (amt <= 800)
-            return 'FREEFIRE_SGMY_520';
+            return 'FREEFIRE_SG_520';
         if (amt <= 1200)
-            return 'FREEFIRE_SGMY_1060';
+            return 'FREEFIRE_SG_1060';
         if (amt <= 2500)
-            return 'FREEFIRE_SGMY_2180';
+            return 'FREEFIRE_SG_2180';
         if (amt <= 6000)
-            return 'FREEFIRE_SGMY_5600';
-        return 'FREEFIRE_SGMY_11500';
+            return 'FREEFIRE_SG_5600';
+        return 'FREEFIRE_SG_11500';
     }
     // 2. Mobile Legends: Bang Bang
     if (slug.includes('mobile-legend') || slug.includes('mlbb') || slug.includes('moonton')) {
@@ -837,12 +849,8 @@ function resolveLiveProductCode(gameSlug, packageName, amount) {
 // DELIVERY: Delivers top-up directly to VNGZZ2GAME Provider API
 // ─────────────────────────────────────────────────────────────────────────────
 async function deliverTopup(gameSlug, playerId, playerZoneId, packageName, price, orderTxnId, productCode, packageAmount) {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     const ref = orderTxnId || `ORD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     console.log(`[Game Provider API] [VNGZZ2GAME] Delivering topup of "${packageName}" for ${gameSlug} ` +
         `(Player: ${playerId}${playerZoneId ? ` / Zone: ${playerZoneId}` : ''}) Ref: ${ref}`);
@@ -850,63 +858,70 @@ async function deliverTopup(gameSlug, playerId, playerZoneId, packageName, price
     const resolvedCode = productCode || resolveLiveProductCode(gameSlug, packageName, packageAmount);
     // 2. Attempt live delivery via VNGZZ2GAME API
     if (apiKey && resolvedCode) {
-        const orderPayload = {
-            product_code: resolvedCode,
-            game_user_id: playerId.trim(),
-            reference: ref,
-        };
-        if (playerZoneId && playerZoneId.trim()) {
-            orderPayload.server_id = playerZoneId.trim();
-            orderPayload.game_zone_id = playerZoneId.trim();
-            orderPayload.zone_id = playerZoneId.trim();
-        }
+        const candidateCodes = [
+            resolvedCode,
+            resolvedCode.replace('FREEFIRE_SGMY_', 'FREEFIRE_SG_'),
+            resolvedCode.replace('FREEFIRE_SG_', 'FREEFIRE_SGMY_'),
+            resolvedCode.startsWith('MLBB_') && !resolvedCode.startsWith('MLBB_SPECIAL_') ? resolvedCode.replace('MLBB_', 'MLBB_SPECIAL_') : null,
+            resolvedCode.startsWith('MLBB_SPECIAL_') ? resolvedCode.replace('MLBB_SPECIAL_', 'MLBB_') : null,
+        ].filter(Boolean);
+        const uniqueCodes = Array.from(new Set(candidateCodes));
         let lastError = '';
         for (const apiUrl of candidateBases) {
-            try {
-                console.log(`[VNGZZ2GAME API] Calling create_order: ${apiUrl}/create_order with payload:`, orderPayload);
-                const res = await fetch(`${apiUrl}/create_order`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': apiKey,
-                    },
-                    body: JSON.stringify(orderPayload),
-                    signal: AbortSignal.timeout(12000),
-                });
-                if (res.status === 404 || res.status >= 500) {
-                    console.warn(`[VNGZZ2GAME API] create_order status ${res.status} on ${apiUrl}, trying next...`);
-                    continue;
+            for (const code of uniqueCodes) {
+                const orderPayload = {
+                    product_code: code,
+                    game_user_id: playerId.trim(),
+                    userid: playerId.trim(),
+                    reference: ref,
+                };
+                if (playerZoneId && playerZoneId.trim()) {
+                    orderPayload.server_id = playerZoneId.trim();
+                    orderPayload.serverid = playerZoneId.trim();
+                    orderPayload.game_zone_id = playerZoneId.trim();
+                    orderPayload.zone_id = playerZoneId.trim();
                 }
-                const data = await res.json().catch(() => ({}));
-                console.log('[VNGZZ2GAME API] create_order response:', res.status, JSON.stringify(data));
-                if (res.ok && (data.status === 'SUCCESS' || data.status === 'success' || data.status === 'APPROVED' || data.success === true)) {
-                    const upstreamRef = data.reference || data.order?.reference || data.order_id || data.id || ref;
-                    console.log(`[VNGZZ2GAME API] ✅ Top-up order successfully created! Reference: ${upstreamRef}`);
-                    return {
-                        success: true,
-                        referenceId: upstreamRef,
-                    };
-                }
-                else {
-                    lastError = data.message || data.error || `HTTP ${res.status}`;
-                    console.warn(`[VNGZZ2GAME API] ⚠️ create_order failed:`, lastError);
-                    if (process.env.SANDBOX_MODE === 'true') {
-                        console.log(`[VNGZZ2GAME API] [Sandbox Mode] Allowing simulated fulfillment for testing.`);
+                try {
+                    console.log(`[VNGZZ2GAME API] Calling create_order: ${apiUrl}/create_order with code ${code}:`, orderPayload);
+                    const res = await fetch(`${apiUrl}/create_order`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': apiKey,
+                        },
+                        body: JSON.stringify(orderPayload),
+                        signal: AbortSignal.timeout(12000),
+                    });
+                    if (res.status === 404 || res.status >= 500) {
+                        console.warn(`[VNGZZ2GAME API] create_order status ${res.status} on ${apiUrl}, trying next...`);
+                        continue;
+                    }
+                    const data = await res.json().catch(() => ({}));
+                    console.log('[VNGZZ2GAME API] create_order response:', res.status, JSON.stringify(data));
+                    if (res.ok && (data.status === 'SUCCESS' || data.status === 'success' || data.status === 'APPROVED' || data.success === true)) {
+                        const upstreamRef = data.reference || data.order?.reference || data.order_id || data.id || ref;
+                        console.log(`[VNGZZ2GAME API] ✅ Top-up order successfully created! Reference: ${upstreamRef}`);
                         return {
                             success: true,
-                            referenceId: `SIM-${ref}`,
+                            referenceId: upstreamRef,
                         };
                     }
-                    return {
-                        success: false,
-                        referenceId: data.reference || ref,
-                        error: lastError,
-                    };
+                    else {
+                        lastError = data.message || data.error || `HTTP ${res.status}`;
+                        console.warn(`[VNGZZ2GAME API] ⚠️ create_order with code ${code} failed:`, lastError);
+                        if (data.message && data.message.toLowerCase().includes('balance')) {
+                            return {
+                                success: false,
+                                referenceId: data.reference || ref,
+                                error: lastError,
+                            };
+                        }
+                    }
                 }
-            }
-            catch (apiErr) {
-                lastError = apiErr.message || apiErr;
-                console.error(`[VNGZZ2GAME API] Error calling create_order on ${apiUrl}:`, lastError);
+                catch (apiErr) {
+                    lastError = apiErr.message || apiErr;
+                    console.error(`[VNGZZ2GAME API] Error calling create_order on ${apiUrl}:`, lastError);
+                }
             }
         }
         if (process.env.SANDBOX_MODE === 'true') {
@@ -934,12 +949,8 @@ async function deliverTopup(gameSlug, playerId, playerZoneId, packageName, price
 // CHECK ORDER STATUS: Queries live status from VNGZZ2GAME API
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkTopupOrderStatus(reference) {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     for (const apiUrl of candidateBases) {
         try {
             const res = await fetch(`${apiUrl}/check_order?reference=${encodeURIComponent(reference)}`, {
@@ -967,12 +978,8 @@ async function checkTopupOrderStatus(reference) {
 // PROVIDER HELPER CALLS: Profile, Categories, Products, Deposit
 // ─────────────────────────────────────────────────────────────────────────────
 async function fetchProviderProfile() {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     for (const apiUrl of candidateBases) {
         try {
             const res = await fetch(`${apiUrl}/profile`, {
@@ -991,12 +998,8 @@ async function fetchProviderProfile() {
     return { status: 'FAILED', message: 'Provider profile unreachable' };
 }
 async function fetchProviderCategories() {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     for (const apiUrl of candidateBases) {
         try {
             const res = await fetch(`${apiUrl}/categories`, {
@@ -1015,12 +1018,8 @@ async function fetchProviderCategories() {
     return { status: 'FAILED', message: 'Categories unreachable' };
 }
 async function fetchProviderProducts(gameCode) {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     for (const apiUrl of candidateBases) {
         try {
             const res = await fetch(`${apiUrl}/products?game_code=${encodeURIComponent(gameCode)}`, {
@@ -1039,12 +1038,8 @@ async function fetchProviderProducts(gameCode) {
     return { status: 'FAILED', message: 'Products unreachable' };
 }
 async function depositProviderBalance(amount, currency = 'USD') {
-    const apiKey = process.env.VNGZZ2GAME_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
-    const candidateBases = [
-        process.env.VNGZZ2GAME_API_URL || 'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game',
-        'https://www.vngzz2game.site/api/v1/game2',
-    ];
+    const apiKey = getVngzzApiKey();
+    const candidateBases = getCandidateBases();
     for (const apiUrl of candidateBases) {
         try {
             const res = await fetch(`${apiUrl}/deposit`, {
@@ -1058,7 +1053,16 @@ async function depositProviderBalance(amount, currency = 'USD') {
                 signal: AbortSignal.timeout(8000),
             });
             if (res.ok) {
-                return await res.json();
+                const json = await res.json();
+                const qrString = json.data?.qr_string || json.qr_string || json.qrCode || '';
+                if (qrString && (!json.md5 && !json.data?.md5)) {
+                    const md5 = require('crypto').createHash('md5').update(qrString).digest('hex').toLowerCase();
+                    json.md5 = md5;
+                    if (json.data)
+                        json.data.md5 = md5;
+                }
+                json.success = true;
+                return json;
             }
         }
         catch (e) {
@@ -1079,16 +1083,23 @@ async function depositProviderBalance(amount, currency = 'USD') {
         });
         if (qrRes.ok) {
             const qrData = await qrRes.json();
+            const qrString = qrData.data?.qr_string || qrData.qr_string || qrData.qrCode || '';
+            const md5 = qrData.data?.md5 || qrData.md5 || (qrString ? require('crypto').createHash('md5').update(qrString).digest('hex').toLowerCase() : '');
             return {
+                success: true,
                 status: 'SUCCESS',
                 message: 'Deposit KHQR generated successfully',
                 amount,
                 currency,
-                qr_image_url: qrData.qr_image_url,
-                qr_png_url: qrData.qr_png_url,
-                deep_link: qrData.deep_link,
-                check_payload: qrData.check_payload,
+                qr_string: qrString,
+                qrCode: qrString,
+                md5,
+                qr_image_url: qrData.data?.qr_image_url || qrData.qr_image_url,
+                qr_png_url: qrData.data?.qr_png_url || qrData.qr_png_url,
+                deep_link: qrData.data?.deep_link || qrData.deep_link,
+                check_payload: qrData.data?.check_payload || qrData.check_payload,
                 data: qrData,
+                payload: qrData,
             };
         }
     }

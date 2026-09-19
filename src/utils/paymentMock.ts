@@ -125,7 +125,7 @@ export async function generateBakongKHQR(
   console.log(`[Bakong KHQR Generator] Starting generation for Txn ID: "${tranId}", Amount: $${amountStr}, Item Name: "${itemName}"`);
 
   // ── 000. VNGZZ2GAME Live ABA KHQR Generator (https://www.vngzz2game.site) ─
-  const vngzzKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+  const vngzzKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY || 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
   if (vngzzKey) {
     try {
       console.log(`[Bakong KHQR Generator] [VNGZZ2GAME] Requesting live ABA KHQR: $${amountStr}, Ref: ${tranId}`);
@@ -483,7 +483,7 @@ export async function checkBakongPaymentStatus(
   }
 
   // ── 0000. VNGZZ2GAME Live Payment Status Check (https://www.vngzz2game.site) ──
-  const vngzzKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY || 'pwArFcCneE0vcBDIGu6ZeIKHUZ3HxeQZ';
+  const vngzzKey = process.env.VNGZZ2GAME_API_KEY || process.env.AUTO_TOPUP_API_KEY || 'pwS5VEcfOkcN7skP5TRuWdUDdS9ZqG9m';
   if (vngzzKey) {
     try {
       const order = await prisma.order.findFirst({

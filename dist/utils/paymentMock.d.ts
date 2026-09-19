@@ -19,6 +19,8 @@ export interface BakongQRResponse {
     qrCode: string;
     md5: string;
     txnId: string;
+    merchantName?: string;
+    gatewayRef?: string;
 }
 /**
  * Computes the ABA HMAC-SHA256 signature based on documentation

@@ -52,10 +52,9 @@ const BCRYPT_ROUNDS = 12;
 const JWT_EXPIRY = '24h';
 exports.ADMIN_EMAILS = [
     'mdara9695@gmail.com',
-    'admin@nadytopup.com',
-    'admin@topup.com',
-    'admin@gmail.com',
 ];
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const loginAttempts = new Map();
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -161,15 +160,25 @@ router.post('/register', async (req, res) => {
         // ✅ OWASP A09: Log registration event
         securityLogger_1.default.registration(req, { id: user.id, email: user.email, role: user.role });
         res.cookie('token', token, getSecureCookieOptions());
-        return res.status(201).json({
-            message: 'User registered successfully',
+        const authData = {
             token,
             user: { id: user.id, email: user.email, role: user.role },
+        };
+        return res.status(201).json({
+            success: true,
+            message: 'User registered successfully',
+            data: authData,
+            payload: authData,
+            ...authData,
         });
     }
     catch (error) {
         console.error('Registration error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error',
+            error: { message: error?.message || 'Internal server error' },
+        });
     }
 });
 // ─── Login Route ──────────────────────────────────────────────────────────────
@@ -239,29 +248,47 @@ router.post('/login', async (req, res) => {
         // ✅ OWASP A09: Log successful login
         securityLogger_1.default.loginSuccess(req, { id: finalUser.id, email: finalUser.email, role: finalUser.role });
         res.cookie('token', token, getSecureCookieOptions());
-        return res.status(200).json({
-            message: 'Login successful',
+        const authData = {
             token,
             user: { id: finalUser.id, email: finalUser.email, role: finalUser.role },
+        };
+        return res.status(200).json({
+            success: true,
+            message: 'Login successful',
+            data: authData,
+            payload: authData,
+            ...authData,
         });
     }
     catch (error) {
         console.error('Login error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error',
+            error: { message: error?.message || 'Internal server error' },
+        });
     }
 });
 // ─── Get Current User Profile Route ──────────────────────────────────────────
 router.get('/me', auth_1.authenticateJWT, async (req, res) => {
     try {
         if (!req.user) {
-            return res.status(401).json({ error: 'Unauthorized' });
+            return res.status(401).json({
+                success: false,
+                message: 'Unauthorized',
+                error: { message: 'Unauthorized' },
+            });
         }
         let user = await prisma_1.default.user.findUnique({
             where: { id: req.user.id },
             select: { id: true, email: true, role: true, createdAt: true },
         });
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+                error: { message: 'User not found' },
+            });
         }
         // Elevate admin if matches email list
         if (exports.ADMIN_EMAILS.includes(user.email.toLowerCase()) && user.role !== 'ADMIN') {
@@ -271,11 +298,21 @@ router.get('/me', auth_1.authenticateJWT, async (req, res) => {
                 select: { id: true, email: true, role: true, createdAt: true },
             });
         }
-        return res.status(200).json({ user });
+        return res.status(200).json({
+            success: true,
+            message: 'User profile retrieved',
+            data: { user },
+            payload: { user },
+            user,
+        });
     }
     catch (error) {
         console.error('Get profile error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Internal server error',
+            error: { message: error?.message || 'Internal server error' },
+        });
     }
 });
 // ─── Logout Route (Clear cookie) ──────────────────────────────────────────────
@@ -286,14 +323,58 @@ router.post('/logout', (_req, res) => {
 // ─── Google OAuth Sign-In Route ───────────────────────────────────────────────
 router.post('/google', async (req, res) => {
     try {
-        const { credential, email: rawEmail, name: rawName } = req.body;
-        if (!credential && !rawEmail) {
-            return res.status(400).json({ error: 'Google credential is required' });
+        const { credential, code, redirect_uri, email: rawEmail, name: rawName } = req.body;
+        if (!credential && !code && !rawEmail) {
+            return res.status(400).json({ error: 'Google credential or authorization code is required' });
         }
         let email = (rawEmail || '').trim().toLowerCase();
         let name = rawName;
-        // Verify credential via Google tokeninfo (id_token, access_token) or JWT payload decode
-        if (credential) {
+        // 1. If authorization code is provided, exchange for tokens with Google
+        if (code) {
+            try {
+                const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        code,
+                        client_id: GOOGLE_CLIENT_ID,
+                        client_secret: GOOGLE_CLIENT_SECRET,
+                        redirect_uri: redirect_uri || 'postmessage',
+                        grant_type: 'authorization_code',
+                    }),
+                });
+                if (tokenRes.ok) {
+                    const tokenData = await tokenRes.json();
+                    if (tokenData.id_token) {
+                        const parts = tokenData.id_token.split('.');
+                        if (parts.length === 3) {
+                            const decoded = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+                            if (decoded.email) {
+                                email = decoded.email.trim().toLowerCase();
+                                name = decoded.name || decoded.given_name || name;
+                            }
+                        }
+                    }
+                    if (!email && tokenData.access_token) {
+                        const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                            headers: { Authorization: `Bearer ${tokenData.access_token}` },
+                        });
+                        if (userInfoRes.ok) {
+                            const info = await userInfoRes.json();
+                            if (info.email) {
+                                email = info.email.trim().toLowerCase();
+                                name = info.name || info.given_name || name;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (codeErr) {
+                console.warn('[Auth] Google code exchange error:', codeErr);
+            }
+        }
+        // 2. Verify credential via Google tokeninfo (id_token, access_token), Supabase or JWT payload decode
+        if (credential && !email) {
             try {
                 let googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
                 if (!googleRes.ok) {
@@ -312,13 +393,27 @@ router.post('/google', async (req, res) => {
                     }
                 }
                 else {
+                    // Check if it's a Supabase token
+                    try {
+                        const { verifySupabaseToken } = await Promise.resolve().then(() => __importStar(require('../lib/supabase')));
+                        const supabaseUser = await verifySupabaseToken(credential);
+                        if (supabaseUser && supabaseUser.email) {
+                            email = supabaseUser.email.trim().toLowerCase();
+                            name = supabaseUser.user_metadata?.full_name || supabaseUser.user_metadata?.name || name;
+                        }
+                    }
+                    catch (sbErr) {
+                        console.warn('[Auth] Supabase token check warning:', sbErr);
+                    }
                     // Fallback: decode base64 JWT payload directly
-                    const parts = credential.split('.');
-                    if (parts.length === 3) {
-                        const decoded = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-                        if (decoded.email) {
-                            email = decoded.email.trim().toLowerCase();
-                            name = decoded.name || name;
+                    if (!email) {
+                        const parts = credential.split('.');
+                        if (parts.length === 3) {
+                            const decoded = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+                            if (decoded.email) {
+                                email = decoded.email.trim().toLowerCase();
+                                name = decoded.name || name;
+                            }
                         }
                     }
                 }
@@ -354,12 +449,15 @@ router.post('/google', async (req, res) => {
             console.log(`[Auth] Registered new Google user: ${email} (${user.role})`);
             securityLogger_1.default.registration(req, { id: user.id, email: user.email, role: user.role });
         }
-        else if (isAdminEmail && user.role !== 'ADMIN') {
-            user = await prisma_1.default.user.update({
-                where: { email },
-                data: { role: 'ADMIN' },
-            });
-            console.log(`[Auth] Elevated Google account to ADMIN: ${email}`);
+        else {
+            const expectedRole = isAdminEmail ? 'ADMIN' : 'USER';
+            if (user.role !== expectedRole) {
+                user = await prisma_1.default.user.update({
+                    where: { email },
+                    data: { role: expectedRole },
+                });
+                console.log(`[Auth] Synced Google account role: ${email} -> ${expectedRole}`);
+            }
         }
         const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
         securityLogger_1.default.loginSuccess(req, { id: user.id, email: user.email, role: user.role });
